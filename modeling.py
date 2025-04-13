@@ -72,11 +72,19 @@ class MLA(nn.Module):
         self.d_heads = args.d_model // args.num_heads
         self.v_head_dim = args.v_head_dim
         self.dim = args.d_model
-        self.lora_rank = args.lora_rank
+        self.lora_rank = args.lora_rank if args.lora_rank else self.dim
         self.n_heads = args.num_heads
-        self.scale = self.d_heads ** 0.5
+        self.scale = self.d_heads ** -0.5
 
         self.query = Linear(self.dim, self.lora_rank, bias = False)
         self.key_value = Linear(self.dim, self.lora_rank, bias = False)
         self.value_b = Linear(self.lora_rank, self.v_head_dim * self.n_heads, bias = False)
         self.wo = Linear(self.v_head_dim * self.n_heads, self.dim)
+
+    def forward(self, x):
+        q_nope, k_nope = self.query(x), self.key_value(x)
+        v = self.value_b(x)
+
+        q_pe, k_pe = q_nope, k_nope
+
+        attn_weights = None
