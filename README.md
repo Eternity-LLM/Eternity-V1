@@ -3,4 +3,4 @@
 > [!WARNING]
 > This repository is developing, so please do <i>**NOT**</i> download until it is completed.
 
-![Eternity-AI](https://avatars.githubusercontent.com/u/188747525?v=4)
+![Eternity-AI](https://raw.githubusercontent.com/Eternity-LLM/Eternity-V1/refs/heads/main/icons/icon2.png)
