@@ -81,10 +81,17 @@ class MLA(nn.Module):
         self.value_b = Linear(self.lora_rank, self.v_head_dim * self.n_heads, bias = False)
         self.wo = Linear(self.v_head_dim * self.n_heads, self.dim)
 
-    def forward(self, x):
+    def forward(self, x, mask = None):
         q_nope, k_nope = self.query(x), self.key_value(x)
         v = self.value_b(x)
 
         q_pe, k_pe = q_nope, k_nope
 
-        attn_weights = None
+        attn_weights = F.softmax(
+            self.scale * (
+                torch.matmul(q_nope, k_nope.transpose(-2, -1)) +
+                torch.matmul(q_pe, k_pe.transpose(-2,-1))
+            ) + (mask if mask != None else 0)
+        )
+
+        output = torch.matmul(attn_weights, V)
