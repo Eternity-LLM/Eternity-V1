@@ -11,7 +11,7 @@ use_deepseek = True
 class ModelArgs:
     # embedding
     dim:int = 7168
-
+    vocab_size:int = 129280
 
 
 class ParallelEmbedding(nn.Module):
@@ -32,9 +32,9 @@ class ParallelEmbedding(nn.Module):
         self.part_vocab_size = vocab_size // world_size
         self.st_idx = rank * self.part_vocab_size
         self.en_idx = self.st_idx + self.part_vocab_size
-        assert (fine_tune_from_deepseek and init_weight != None) or not fine_tune_from_deepseek
+        
         if use_deepseek:
-            self.weight = init_weight[self.st_idx:self.en_idx, :]
+            self.weight = nn.Parameter(init_weight[self.st_idx:(self.en_idx+1), :]) if init_weight else nn.Parameter(torch.empty(self.part_vocab_size, self.dim))
             self.weight.requires_grad = False
             self.A = nn.Parameter(torch.empty(self.part_vocab_size, lora_rank))
             self.B = nn.Parameter(torch.empty(lora_rank, self.part_vocab_size))
