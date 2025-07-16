@@ -6,7 +6,7 @@ import torch
 
 world_size = 1
 rank = 0
-fine_tune_from_deepseek = True
+use_deepseek = True
 @dataclass
 class ModelArgs:
     # embedding
@@ -33,7 +33,7 @@ class ParallelEmbedding(nn.Module):
         self.st_idx = rank * self.part_vocab_size
         self.en_idx = self.st_idx + self.part_vocab_size
         assert (fine_tune_from_deepseek and init_weight != None) or not fine_tune_from_deepseek
-        if fine_tune_from_deepseek:
+        if use_deepseek:
             self.weight = init_weight[self.st_idx:self.en_idx, :]
             self.weight.requires_grad = False
             self.A = nn.Parameter(torch.empty(self.part_vocab_size, lora_rank))
