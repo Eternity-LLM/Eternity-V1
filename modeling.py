@@ -57,7 +57,7 @@ class ParallelEmbedding(nn.Module):
         if use_deepseek:
             y = F.embedding(x, self.weight + torch.matmul(self.A, self.B))
         else:
-        	y = F.embedding(x, self.weight)
+            y = F.embedding(x, self.weight)
         if world_size > 1:
             y[mask] = 0
             dist.all_reduce(y)
