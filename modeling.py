@@ -43,7 +43,7 @@ class ParallelEmbedding(nn.Module):
         
         self.weight = nn.Parameter(init_weight[self.st_idx:(self.en_idx+1), :]) if init_weight else nn.Parameter(torch.empty(self.part_vocab_size, self.dim))
         if use_deepseek:
-        	self.weight.requires_grad = False
+            self.weight.requires_grad = False
         
         if lora_rank:
             self.A = nn.Parameter(torch.empty(self.part_vocab_size, lora_rank))
