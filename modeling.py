@@ -81,15 +81,15 @@ class Linear(nn.Module):
             self.bias = nn.Parameter(torch.empty(out_features))
         else:
             self.register_parameter("bias", None)
-            
-	def forward(self, x:torch.Tensor):
+
+    def forward(self, x:torch.Tensor):
         if self.weight.element_size() > 1:
-        	weighted_sum = torch.matmul(x, self.weight)
+            weighted_sum = torch.matmul(x, self.weight)
         elif gemm_impl == 'bf16':
             weighted_sum = torch.matmul(x, weight_dequant(self.weight, self.weight.scale))
         else:
             x, scale = act_quant(x, block_size)
-        	weighted_sum = fp8_gemm(x, scale, weight, weight.scale)
+            weighted_sum = fp8_gemm(x, scale, weight, weight.scale)
         if self.__bias:
             weighted_sum += self.bias
         return weighted_sum
