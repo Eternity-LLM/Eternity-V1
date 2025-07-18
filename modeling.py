@@ -19,10 +19,20 @@ gemm_impl = 'bf16'
 
 @dataclass
 class ModelArgs:
+    max_batch_size:int = 8
+    max_seq_len:int = 524288
+    dtype:Literal['fp8', 'bf16'] = 'bf16'
     # embedding
     dim:int = 7168
     vocab_size:int = 129280
     emb_lora_rank:int = 256
+    # attention
+    q_lora_rank:int = 256
+    kv_lora_rank:int = 256
+    qk_nope_head_dim:int = 128
+    qk_rope_head_dim:int = 64
+    v_head_dim:int = 128
+    n_heads:int = 32
 
 
 class ParallelEmbedding(nn.Module):
