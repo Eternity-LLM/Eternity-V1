@@ -1,5 +1,7 @@
 # Eternity-V1 modeling.py
-# Edited by Haozhe Xu, Eternity-LLM Organization
+# Edited by Haozhe Xu (14), Eternity-LLM Organization (since 2025)
+# Based on DeepSeek-V3 ( url: https://github.com/deepseek-ai/deepseek-v3/ )
+# Note that we use hybrid model (Attention, MLP, MoE, SSM)
 
 from torch import nn
 from torch.nn import functional as F
@@ -11,7 +13,7 @@ import torch
 
 world_size = 1
 rank = 0
-use_deepseek = True
+use_deepseek = True   # if true, part of the parameters will be fine-tuned from DeepSeek-R1-0528.
 block_size = 128
 gemm_impl = 'bf16'
 
@@ -70,14 +72,14 @@ class Linear(nn.Module):
     # Custom linear layer
     defalt_dtype = torch.bfloat16
     
-    def __init__(self, in_features:int, out_features:int, bias:bool = False, dtype = None) -> None:
+    def __init__(self, in_features:int, out_features:int, bias:bool = False, dtype = None) -> None :
         super().__init__()
-        self.weight = nn.Parameter(torch.empty(in_features, out_features, dtype = dtype or Linear.defalt_dtype))
+        self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype = dtype or Linear.defalt_dtype))
         self.__bias = bias
         if self.weight.element_size() == 1:
             scale_out_features = (out_features + block_size - 1) // block_size
             scale_in_features = (in_features + block_size - 1) // block_size
-            self.weight.scale = self.scale = nn.Parameter(torch.empty(scale_in_features, scale_out_features, dtype=torch.float32))
+            self.weight.scale = self.scale = nn.Parameter(torch.empty(scale_out_features, scale_in_features, dtype=torch.float32))
         else:
             self.register_parameter("scale", None)
         if bias:
@@ -87,12 +89,44 @@ class Linear(nn.Module):
 
     def forward(self, x:torch.Tensor):
         if self.weight.element_size() > 1:
-            weighted_sum = torch.matmul(x, self.weight)
+            weighted_sum = F.linear(x, self.weight, None)
         elif gemm_impl == 'bf16':
-            weighted_sum = torch.matmul(x, weight_dequant(self.weight, self.weight.scale))
+            weighted_sum = F.linear(x, weight_dequant(self.weight, self.weight.scale))
         else:
             x, scale = act_quant(x, block_size)
             weighted_sum = fp8_gemm(x, scale, weight, weight.scale)
         if self.__bias:
             weighted_sum += self.bias
         return weighted_sum
+
+class ColumnParallelLinear(Linear):
+    def __init__(self, in_features:int, out_features:int, bias:bool = False, dtype = None) -> None :
+        assert out_features % world_size == 0
+        self.sz = out_features // world_size
+        super().__init__(in_features, self.sz, bias = bias, dtype = dtype)
+    def forward(self, x:torch.Tensor):
+        return super().forward(x)
+
+class RowParallelLinear(Linear):
+    def __init__(self, in_features:int, out_features:int, bias:bool = False, dtype = None) -> None :
+        assert in_features % world_size == 0
+        self.sz = in_features // world_size
+        super().__init__(self.sz, out_features, bias = bias,dtype = dtype)
+        self.__bias_0 = bias
+        self.__bias = False
+    def forward(self, x:torch.Tensor):
+        y = super().forward(x)
+        if world_size > 1 :
+            y = dist.all_reduce(y)
+        if self.__bias_0 :
+            y += self.bias
+        return y
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim:int, eps:float = 1e-6)->None:
+        super().__init__()
+        self.dim, self.eps = dim, eps
+        self.weight = nn.Parameter(torch.ones(dim))
+    def forward(self, x:torch.Tensor):
+        return F.rms_norm(x, (self.dim,), self.weight, self.eps)
+
