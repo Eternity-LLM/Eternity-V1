@@ -20,7 +20,7 @@ class ModelArgs:
     # embedding
     dim:int = 7168
     vocab_size:int = 129280
-    emb_lora_rank:int = 0
+    emb_lora_rank:int = 256
 
 
 class ParallelEmbedding(nn.Module):
@@ -48,6 +48,9 @@ class ParallelEmbedding(nn.Module):
         if lora_rank:
             self.A = nn.Parameter(torch.empty(self.part_vocab_size, lora_rank))
             self.B = nn.Parameter(torch.empty(lora_rank, self.part_vocab_size))
+        else:
+            self.register_parameter('A', None)
+            self.register_parameter('B', None)
         return None
     def forward(self, x:torch.Tensor):
         if world_size > 1:
@@ -64,7 +67,7 @@ class ParallelEmbedding(nn.Module):
         return y
 
 class Linear(nn.Module):
-    #
+    # Custom linear layer
     defalt_dtype = torch.bfloat16
     
     def __init__(self, in_features:int, out_features:int, bias:bool = False, dtype = None) -> None:
