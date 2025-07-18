@@ -42,7 +42,7 @@ class ParallelEmbedding(nn.Module):
         self.part_vocab_size = vocab_size // world_size
         self.st_idx = rank * self.part_vocab_size
         self.en_idx = self.st_idx + self.part_vocab_size
-        
+        self.rank = lora_rank
         self.weight = nn.Parameter(init_weight[self.st_idx:(self.en_idx+1), :]) if init_weight else nn.Parameter(torch.empty(self.part_vocab_size, self.dim))
         if use_deepseek:
             self.weight.requires_grad = False
@@ -59,7 +59,7 @@ class ParallelEmbedding(nn.Module):
             mask = (x < self.vocab_start_idx) | (x >= self.vocab_end_idx)
             x = x - self.vocab_start_idx
             x[mask] = 0
-        if use_deepseek:
+        if self.rank:
             y = F.embedding(x, self.weight + torch.matmul(self.A, self.B))
         else:
             y = F.embedding(x, self.weight)
