@@ -117,7 +117,7 @@ class RowParallelLinear(Linear):
     def forward(self, x:torch.Tensor):
         y = super().forward(x)
         if world_size > 1 :
-            y = dist.all_reduce(y)
+            dist.all_reduce(y)
         if self.__bias_0 :
             y += self.bias
         return y
