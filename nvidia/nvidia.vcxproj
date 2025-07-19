@@ -77,7 +77,11 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="kernel.cu" />
+    <CudaCompile Include="cpp_extension.cu" />
+    <CudaCompile Include="functions.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\Eternity-LLM\Eternity-V1\nvidia\README.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
