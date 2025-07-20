@@ -15,7 +15,7 @@ from . import utils as u
 
 world_size = 1
 rank = 0
-use_deepseek = True   # if true, part of the parameters will be fine-tuned from DeepSeek-R1-0528.
+use_deepseek = True   # If true, part of the parameters will be fine-tuned from DeepSeek-R1-0528, but model architecture is still Eternity-V1 (hybird model).
 block_size = 128
 gemm_impl = 'bf16'
 
@@ -35,6 +35,7 @@ class ModelArgs:
     qk_rope_head_dim:int = 64
     v_head_dim:int = 128
     n_heads:int = 128
+    mscale:float = 1.0
     # mlp
     mlp_dim:int = 18432
     # moe
@@ -45,6 +46,11 @@ class ModelArgs:
     n_topk_group:int = 4
     n_experts_per_tok:int = 8
     n_dense_layers:int = 3
+    # rope
+    beta_fast:int = 32
+    beta_slow:int = 1
+    rope_theta:float = 10000.0
+    rope_factor:float = 40.0
 
 
 class ParallelEmbedding(nn.Module):
@@ -152,3 +158,13 @@ class RMSNorm(nn.Module):
     def forward(self, x:torch.Tensor):
         return F.rms_norm(x, (self.dim,), self.weight, self.eps)
 
+# RoPE
+def precompute_freqs_cis(args:ModelArgs) -> torch.Tensor :
+    dim = args.qk_rope_head_dim
+    seqlen = args.max_seq_len
+    bf = args.beta_fast
+    bs = args.beta_slow
+    base = args.rope_theta
+    factor = args.rope_factor
+
+    
