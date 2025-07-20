@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Tuple, Optional, Literal
 from .kernel import act_quant, weight_dequant, fp8_gemm
 import torch
+from . import utils as u
+
 
 world_size = 1
 rank = 0
