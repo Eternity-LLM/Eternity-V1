@@ -188,7 +188,7 @@ def precompute_freqs_cis(args:ModelArgs) -> torch.Tensor :
         smooth = 1 - linear_ramp_factor(low, high, dim // 2)
         freqs = freqs / factor * (1 - smooth) + freqs * smooth
 
-	t = torch.arange(seqlen)
+    t = torch.arange(seqlen)
     freqs = torch.outer(t, freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
     return freqs_cis
