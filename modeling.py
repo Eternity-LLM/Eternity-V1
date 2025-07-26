@@ -38,7 +38,13 @@ class ModelArgs:
     n_heads:int = 128
     mscale:float = 1.0
     # dla (differential latent attention)
-
+    dla_q_lora_rank:int = 1536
+    dla_kv_lora_rank:int = 512
+    dla_qk_nope_head_dim:int = 128
+    dla_qk_rope_head_dim:int = 64
+    dla_v_head_dim:int = 128
+    dla_n_heads:int = 128
+    dla_mscale:float = 1.0
     # ghm (gated hybrid module)
     gate_dim = 4096
     # mlp (multi-layer perceptrom)
@@ -202,3 +208,58 @@ def apply_rope(x:torch.Tensor, freqs_cis:torch.Tensor) -> torch.Tensor :
     freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
     y = torch.view_as_real(x * freqs_cis).flatten(3)
     return y.to(dtype)
+
+class DLA(nn.Module):
+    # Differential Latent Attention (DLA) 
+    # still developing, not finished yet.
+    def __init__(self, args:ModelArgs, layer_idx:int) -> None:
+        super().__init__()
+        self.dim = args.dim
+        self.n_heads = args.dla_n_heads
+        self.n_local_heads = args.dla_n_heads // world_size
+        self.q_lora_rank = args.dla_q_lora_rank
+        self.kv_lora_rank = args.dla_kv_lora_rank
+        self.qk_nope_head_dim = args.dla_qk_nope_head_dim
+        self.qk_rope_head_dim = args.dla_qk_rope_head_dim
+        self.v_head_dim = args.dla_v_head_dim
+        self.qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
+
+        if self.q_lora_rank == 0:
+            self.wq = ColumnParallelLinear(self.dim, self.n_heads * self.qk_head_dim)
+        else:
+            self.wq_a = Linear(self.dim, self.q_lora_rank)
+            self.wq_b = ColumnParallelLinear(self.q_lora_rank, self.n_heads * self.qk_head_dim)
+        self.wkv_a = Linear(self.dim, self.kv_lora_rank)
+        self.wkv_b = ColumnParallelLinear(self.kv_lora_rank, self.n_heads * (self.qk_head_dim + self.v_head_dim))
+        self.scale = self.qk_head_dim ** (-0.5)
+        if args.max_seq_len > args.original_seq_len:
+            mscale = 0.1 * args.dla_mscale * math.log(args.rope_factor) + 1.0
+            self.scale = self.scale * mscale * mscale
+        self.register_buffer("kv_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.kv_lora_rank), persistent=False)
+        self.register_buffer("pe_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.qk_rope_head_dim), persistent=False)
+
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
+        bsz, seqlen, _ = x.size()
+        end_pos = start_pos + seqlen
+        if self.q_lora_rank == 0:
+            q = self.wq(x)
+        else:
+            q = self.wq_b(self.wq_a(x))
+        q = q.view(bsz, seqlen, self.n_local_heads, self.qk_head_dim)
+        q_nope, q_pe = torch.split(q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1)
+        q_pe = apply_rope(q_pe, freqs_cis)
+        kv = self.wkv_a(x)
+        kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
+        k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis)
+
+        wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale, block_size) 
+        wkv_b = wkv_b.view(self.n_local_heads, -1, self.kv_lora_rank)
+        q_nope = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, :self.qk_nope_head_dim])
+        self.kv_cache[:bsz, start_pos:end_pos] = kv
+        self.pe_cache[:bsz, start_pos:end_pos] = k_pe.squeeze(2)
+        scores = (torch.einsum('bshc,btc->bsht', q_nope, self.kv_cache[:bsz, :end_pos]) + 
+        torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos])) * self.scale
+        if mask is not None:
+            scores += mask.unsqueeze(1)
+        scores.to(torch.float32)
+        scores = u.f_softmax(scores, dim=-1).type_as(x)
