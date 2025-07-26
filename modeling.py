@@ -57,12 +57,17 @@ class ModelArgs:
     n_topk_group:int = 4
     n_experts_per_tok:int = 8
     n_dense_layers:int = 3
+    routed_scale:float = 2.5
     # rope
     beta_fast:int = 32
     beta_slow:int = 1
     rope_theta:float = 10000.0
     rope_factor:float = 40.0
     original_seq_len:int = 4096
+    # block
+    n_diff_attn_layers:int = 5
+    pure_attn_ratio:float = 0.08
+    n_blocks:int = 61
 
 class ParallelEmbedding(nn.Module):
     # Embedding layer with parallelism support across distributed processes and low-rank adaptation.
@@ -107,14 +112,28 @@ class ParallelEmbedding(nn.Module):
             dist.all_reduce(y)
         return y
 
+def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+    if weight.element_size() > 1:
+        return F.linear(x, weight, bias)
+    elif gemm_impl == "bf16":
+        weight = weight_dequant(weight, weight.scale)
+        return F.linear(x, weight, bias)
+    else:
+        x, scale = act_quant(x, block_size)
+        y = fp8_gemm(x, scale, weight, weight.scale)
+        if bias is not None:
+            y += bias
+        return y
+
+
 class Linear(nn.Module):
-    # Custom linear layer
-    defalt_dtype = torch.bfloat16
-    
-    def __init__(self, in_features:int, out_features:int, bias:bool = False, dtype = None) -> None :
+    dtype = torch.bfloat16
+
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
         super().__init__()
-        self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype = dtype or Linear.defalt_dtype))
-        self.__bias = bias
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype=dtype or Linear.dtype))
         if self.weight.element_size() == 1:
             scale_out_features = (out_features + block_size - 1) // block_size
             scale_in_features = (in_features + block_size - 1) // block_size
@@ -126,40 +145,35 @@ class Linear(nn.Module):
         else:
             self.register_parameter("bias", None)
 
-    def forward(self, x:torch.Tensor):
-        if self.weight.element_size() > 1:
-            weighted_sum = F.linear(x, self.weight, None)
-        elif gemm_impl == 'bf16':
-            weighted_sum = F.linear(x, weight_dequant(self.weight, self.weight.scale))
-        else:
-            x, scale = act_quant(x, block_size)
-            weighted_sum = fp8_gemm(x, scale, weight, weight.scale)
-        if self.__bias:
-            weighted_sum += self.bias
-        return weighted_sum
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return linear(x, self.weight, self.bias)
+
 
 class ColumnParallelLinear(Linear):
-    def __init__(self, in_features:int, out_features:int, bias:bool = False, dtype = None) -> None :
-        assert out_features % world_size == 0
-        self.sz = out_features // world_size
-        super().__init__(in_features, self.sz, bias = bias, dtype = dtype)
-    def forward(self, x:torch.Tensor):
-        return super().forward(x)
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
+        assert out_features % world_size == 0, f"Output features must be divisible by world size (world_size={world_size})"
+        self.part_out_features = out_features // world_size
+        super().__init__(in_features, self.part_out_features, bias, dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = linear(x, self.weight, self.bias)
+        return y
+
 
 class RowParallelLinear(Linear):
-    def __init__(self, in_features:int, out_features:int, bias:bool = False, dtype = None) -> None :
-        assert in_features % world_size == 0
-        self.sz = in_features // world_size
-        super().__init__(self.sz, out_features, bias = bias,dtype = dtype)
-        self.__bias_0 = bias
-        self.__bias = False
-    def forward(self, x:torch.Tensor):
-        y = super().forward(x)
-        if world_size > 1 :
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
+        assert in_features % world_size == 0, f"Input features must be divisible by world size (world_size={world_size})"
+        self.part_in_features = in_features // world_size
+        super().__init__(self.part_in_features, out_features, bias, dtype)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = linear(x, self.weight)
+        if world_size > 1:
             dist.all_reduce(y)
-        if self.__bias_0 :
+        if self.bias is not None:
             y += self.bias
         return y
+
 
 class RMSNorm(nn.Module):
     def __init__(self, dim:int, eps:float = 1e-6)->None:
@@ -336,3 +350,62 @@ class Gate(nn.Module):
         self.topk = args.n_experts_per_tok
         self.n_groups = args.n_routed_group
         self.n_topk_group = args.n_topk_group
+        self.routed_scale = args.routed_scale
+        self.weight = nn.Parameter(torch.empty(args.n_routed, args.dim))
+        self.bias = nn.Parameter(torch.empty(args.n_routed))
+    def forward(self, x:torch.Tensor):
+        scores = linear(x, self.weight)
+        scores = u.f_sigmoid(scores)
+        original_scores = scores
+        scores += self.bias
+        if self.n_groups > 1 :
+            scores = scores.view(x.size(0), self.n_groups, -1)
+            group_scores = scores.topk(2, dim = -1)[0].sum(dim = -1)
+            indices = group_scores.topk(self.n_topk_group, dim = -1)[1]
+            mask = scores.new_ones(x.size(0), self.n_groups, dtype=bool).scatter_(1, indices, False)
+            scores = scores.masked_fill_(mask.unsqueeze(-1), float("-inf")).flatten(1)
+        indices = torch.topk(scores, self.topk, dim = -1)[1]
+        weights = original_scores.gather(1, indices)
+        weights /= weights.sum(dim=-1, keepdim=True)
+        weights *= self.route_scale
+        return weights.type_as(x), indices
+
+class Expert(nn.Module):
+    def __init__(self, dim:int, moe_dim:int):
+        sumer().__init__()
+        self.w1 = Linear(dim, moe_dim)
+        self.w2 = Linear(moe_dim, dim)
+        self.w3 = Linear(dim, moe_dim)
+    def forward(self, x:torch.Tensor):
+        return self.w2(u.f_silu(self.w1(x)) * self.w3(x))
+
+class MoE(nn.Module):
+    # Mixture of Experts (MoE)
+    # still developing, not finished yet.
+    pass
+
+class Block(nn.Module):
+    # Eternity-V1 StateFormer Block
+    def __init__(self, args:ModelArgs, layer_idx:int) -> None:
+        super().__init__()
+        if layer_idx < args.n_diff_attn_layers:
+            self.seq_transformation = DLA(args, layer_idx)
+        else:
+            n_blocks = args.n_blocks - args.n_diff_attn_layers
+            pass
+            # still developing, not finished yet.
+        self.ffn = MLP(args.dim, args.mlp_dim) if layer_idx < args.n_dense_layers else MoE(args)
+        self.norm1 = RMSNorm(args.dim)
+        self.norm2 = RMSNorm(args.dim)
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
+        x = x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask)
+        x = x + self.ffn(self.norm2(x))
+        return x
+
+class StateFormer(nn.Module):
+    # Eternity-V1 StateFormer Model
+    # still developing, not finished yet.
+    pass
+
+
+
