@@ -211,7 +211,6 @@ def apply_rope(x:torch.Tensor, freqs_cis:torch.Tensor) -> torch.Tensor :
 
 class DLA(nn.Module):
     # Differential Latent Attention (DLA) 
-    # still developing, not finished yet.
     def __init__(self, args:ModelArgs, layer_idx:int) -> None:
         super().__init__()
         self.dim = args.dim
@@ -224,6 +223,12 @@ class DLA(nn.Module):
         self.v_head_dim = args.dla_v_head_dim
         self.qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
 
+        self.lambda_init = 0.8 - 0.6 * torch.exp(-0.3 * layer_idx)
+        self.lambda_q_nope = nn.Parameter(torch.tensor(self.qk_nope_head_dim))
+        self.lambda_q_rope = nn.Parameter(torch.tensor(self.qk_rope_head_dim))
+        self.lambda_k_nope = nn.Parameter(torch.tensor(self.qk_nope_head_dim))
+        self.lambda_k_rope = nn.Parameter(torch.tensor(self.qk_rope_head_dim))
+        self.register_parameter("lambda_", None)
         if self.q_lora_rank == 0:
             self.wq = ColumnParallelLinear(self.dim, self.n_heads * self.qk_head_dim)
         else:
@@ -232,6 +237,7 @@ class DLA(nn.Module):
         self.wkv_a = Linear(self.dim, self.kv_lora_rank)
         self.wkv_b = ColumnParallelLinear(self.kv_lora_rank, self.n_heads * (self.qk_head_dim + self.v_head_dim))
         self.scale = self.qk_head_dim ** (-0.5)
+        self.wo = RowParallelLinear(self.n_heads * self.v_head_dim, self.dim)
         if args.max_seq_len > args.original_seq_len:
             mscale = 0.1 * args.dla_mscale * math.log(args.rope_factor) + 1.0
             self.scale = self.scale * mscale * mscale
@@ -239,6 +245,8 @@ class DLA(nn.Module):
         self.register_buffer("pe_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.qk_rope_head_dim), persistent=False)
 
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
+        if self.lambda_ is None:
+            lambda_ = torch.exp(self.lambda_q_nope @ self.lambda_k_nope) - torch.exp(self.lambda_q_rope @ self.lambda_k_rope) + self.lambda_init
         bsz, seqlen, _ = x.size()
         end_pos = start_pos + seqlen
         if self.q_lora_rank == 0:
@@ -257,9 +265,74 @@ class DLA(nn.Module):
         q_nope = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, :self.qk_nope_head_dim])
         self.kv_cache[:bsz, start_pos:end_pos] = kv
         self.pe_cache[:bsz, start_pos:end_pos] = k_pe.squeeze(2)
-        scores = (torch.einsum('bshc,btc->bsht', q_nope, self.kv_cache[:bsz, :end_pos]) + 
-        torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos])) * self.scale
+        #scores = (torch.einsum('bshc,btc->bsht', q_nope, self.kv_cache[:bsz, :end_pos]) + 
+        #torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos])) * self.scale
+        nope_scores = torch.einsum('bshc,btc->bsht', q_nope, self.kv_cache[:bsz, :end_pos]) * self.scale
+        pe_scores = torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos]) * self.scale
+
         if mask is not None:
-            scores += mask.unsqueeze(1)
-        scores.to(torch.float32)
-        scores = u.f_softmax(scores, dim=-1).type_as(x)
+            mask = mask.unsqueeze(1)
+            nope_scores += mask
+            pe_scores += mask
+
+        nope_weights = u.f_softmax(nope_scores.to(torch.float32), dim=-1)
+        pe_weights = u.f_softmax(pe_scores.to(torch.float32), dim=-1)
+        weights = nope_weights - lambda_ * pe_weights
+        x = torch.einsum('bsht,btc->bshc', weights, self.kv_cache[:bsz, :end_pos])
+        x = torch.einsum('bshc,hdc->bshd', x, wkv_b[:, -self.v_head_dim:])
+        x = self.wo(x.flatten(2))
+        return x
+
+class SSA(nn.Module):
+    # State Space Attention (SSA)
+    # still developing, not finished yet.
+    pass
+
+class SeparableConv1d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=True):
+        super().__init__()
+        
+        self.depthwise = nn.Conv1d(
+            in_channels, 
+            in_channels, 
+            kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=in_channels,  
+            bias=bias
+        )
+        
+        self.pointwise = nn.Conv1d(
+            in_channels, 
+            out_channels, 
+            kernel_size=1,
+            bias=bias
+        )
+
+    def forward(self, x):
+        return self.pointwise(self.depthwise(x))
+
+class GHM(nn.Module):
+    # Gated Hybrid Module (GHM)
+    # still developing, not finished yet.
+    pass
+
+class MLP(nn.Module):
+    # Multi-Layer Perceptron (MLP)
+    def __init__(self, dim:int, mlp_dim:int) -> None:
+        super().__init__()
+        self.w1 = ColumnParallelLinear(dim, mlp_dim)
+        self.w2 = RowParallelLinear(mlp_dim, dim)
+        self.w3 = ColumnParallelLinear(dim, mlp_dim)
+    
+    def forward(self, x:torch.Tensor):
+        return self.w2(u.f_silu(self.w1(x)) * self.w3(x))
+
+class Gate(nn.Module):
+    def __init__(self, args:ModelArgs) -> None:
+        super().__init__()
+        self.dim = args.dim
+        self.topk = args.n_experts_per_tok
+        self.n_groups = args.n_routed_group
+        self.n_topk_group = args.n_topk_group
