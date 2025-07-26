@@ -196,4 +196,6 @@ def precompute_freqs_cis(args:ModelArgs) -> torch.Tensor :
 def apply_rope(x:torch.Tensor, freqs_cis:torch.Tensor) -> torch.Tensor :
     dtype = x.dtype
     x = torch.view_as_complex(x.float().view(*x.shape[:-1], -1, 2))
-    
+    freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
+    y = torch.view_as_real(x * freqs_cis).flatten(3)
+    return y.to(dtype)
