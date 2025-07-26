@@ -16,7 +16,7 @@ from . import utils as u
 
 world_size = 1
 rank = 0
-use_deepseek = True   # If true, part of the parameters will be fine-tuned from DeepSeek-R1-0528, but model architecture is still Eternity-V1 (hybird model).
+use_deepseek = True # If true, part of the parameters will be fine-tuned from DeepSeek-R1-0528, but model architecture is still Eternity-V1 (hybird model).
 block_size = 128
 gemm_impl = 'bf16'
 
@@ -29,7 +29,7 @@ class ModelArgs:
     dim:int = 7168
     vocab_size:int = 129280
     emb_lora_rank:int = 256
-    # attention
+    # ssa (state space attention)
     q_lora_rank:int = 1536
     kv_lora_rank:int = 512
     qk_nope_head_dim:int = 128
@@ -37,9 +37,13 @@ class ModelArgs:
     v_head_dim:int = 128
     n_heads:int = 128
     mscale:float = 1.0
-    # mlp
+    # dla (differential latent attention)
+
+    # ghm (gated hybrid module)
+    gate_dim = 4096
+    # mlp (multi-layer perceptrom)
     mlp_dim:int = 18432
-    # moe
+    # moe (mixture of experts)
     moe_dim:int = 2048
     n_shared:int = 1
     n_routed:int = 256
@@ -53,7 +57,6 @@ class ModelArgs:
     rope_theta:float = 10000.0
     rope_factor:float = 40.0
     original_seq_len:int = 4096
-
 
 class ParallelEmbedding(nn.Module):
     # Embedding layer with parallelism support across distributed processes and low-rank adaptation.
