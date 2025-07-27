@@ -423,3 +423,18 @@ class StateFormer(nn.Module):
         self.final = ColumnParallelLinear(args.dim, args.vocab_size, dtype = torch.get_default_dtype())
         self.register_buffer("freqs_cis", precompute_freqs_cis(args), persistent=False)
     
+    # If you are using this model for inference, then add this line of code:
+    # @torch.inference_mode()
+    def forward(self, tokens:torch.Tensor, start_pos:int=0, mask:Optional[torch.Tensor]=None) -> None :
+        seqlen = tokens.size(1)
+        h = self.emb(tokens)
+        freqs_cis = self.freqs_cis[start_pos:(start_pos+seqlen)]
+        for layer in self.layers:
+            h = layer(h, start_pos, freqs_cis, mask)
+        h = self.norm(h)
+        logits = self.final(h)
+        if world_size > 1:
+            all_logits = [torch.empty_like(logits) for _ in range(world_size)]
+            dist.all_gather(all_logits, logits)
+            logits = torch.cat(all_logits, dim = -1)
+        return logits
