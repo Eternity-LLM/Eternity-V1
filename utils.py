@@ -1,5 +1,7 @@
 import torch
 import torch.nn.functional as F
+from typing import Optional
+from einops import rearrange
 
 def f(x):
 	idx_1 = x>=0.
@@ -47,3 +49,27 @@ def loss(y, y_pred):
     loss = torch.sum(loss, dim=-1)
     return loss
 
+# state space attention (SSA)
+class StateSpaceAttentionFunction(torch.autograd.Function):
+    # State Space Attention Mechanism
+    # Inputs:
+    #  query: (batch_size, seq_len, num_heads, qk_head_dim)
+    #  key:   (batch_size, seq_len, num_heads, qk_head_dim)
+    #  value: (batch_size, seq_len, num_heads, v_head_dim)
+    #  linear_mask: (batch_size, seq_len, seq_len)
+    #  init_states: Optional (batch_size, num_chunks, seq_len, num_heads, qk_head_dim, v_head_dim) or None
+    @staticmethod
+    def forward(ctx, query:torch.Tensor, key:torch.Tensor, value:torch.Tensor, linear_mask:torch.Tensor, init_states:Optional[torch.Tensor], block_len:int=64):
+        assert query.dtype == key.dtype == value.dtype == linear_mask.dtype
+        assert value.shape[1] % block_len == 0 or value.shape[1] < block_len
+        assert key.shape[1] == value.shape[1]
+
+        if value.shape[1] < block_len:
+            if init_states is None:
+                init_states = torch.zeros((query.shape[0], 1, key.shape[1], query.shape[2], key.shape[3], value.shape[3]), dtype=query.dtype, device=query.device)
+            init_states = rearrange(init_states, 'b c l ... -> b (c l) ...', l=block_len) # (batch_size, seq_len, num_heads, qk_head_dim, v_head_dim)
+            KV = torch.einsum('blhk,blhv->blhkv', key, value)  # (batch_size, seq_len, num_heads, qk_head_dim, v_head_dim)
+            states = init_states + KV
+            
+
+        
