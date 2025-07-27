@@ -437,7 +437,7 @@ class StateFormer(nn.Module):
             if n < self.n_diff_attn_layers:
                 h = layer(h, start_pos, freqs_cis, attn_mask)
             else:
-                h = layer(h, start_pos, freqs_cis, mask)
+                h = layer(h, start_pos, freqs_cis, linear_mask)
             n += 1
         h = self.norm(h)
         logits = self.final(h)
