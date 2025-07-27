@@ -417,6 +417,9 @@ class StateFormer(nn.Module):
         self.max_seq_len = args.max_seq_len
         self.emb = ParallelEmbedding(args.vocab_size, args.dim, init_weight=None, lora_rank=args.emb_lora_rank)
         self.layers = torch.nn.ModuleList()
+        self.n_blocks = args.n_blocks
+        self.n_diff_attn_layers = args.n_diff_attn_layers
+        self.ratio = args.pure_attn_ratio
         for idx in range(args.n_blocks):
             self.layers.append(Block(args, idx))
         self.norm = RMSNorm(args.dim)
@@ -425,12 +428,17 @@ class StateFormer(nn.Module):
     
     # If you are using this model for inference, then add this line of code:
     # @torch.inference_mode()
-    def forward(self, tokens:torch.Tensor, start_pos:int=0, mask:Optional[torch.Tensor]=None) -> None :
+    def forward(self, tokens:torch.Tensor, start_pos:int=0, attn_mask:Optional[torch.Tensor]=None, linear_mask:Optional[torch.Tensor]=None) -> None :
         seqlen = tokens.size(1)
         h = self.emb(tokens)
         freqs_cis = self.freqs_cis[start_pos:(start_pos+seqlen)]
+        n = 0
         for layer in self.layers:
-            h = layer(h, start_pos, freqs_cis, mask)
+            if n < self.n_diff_attn_layers:
+                h = layer(h, start_pos, freqs_cis, attn_mask)
+            else:
+                h = layer(h, start_pos, freqs_cis, mask)
+            n += 1
         h = self.norm(h)
         logits = self.final(h)
         if world_size > 1:
