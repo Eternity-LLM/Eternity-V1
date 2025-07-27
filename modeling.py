@@ -45,6 +45,9 @@ class ModelArgs:
     dla_v_head_dim:int = 128
     dla_n_heads:int = 128
     dla_mscale:float = 1.0
+    # ssm (state space module)
+    state_dim:int = 2048
+    ssm_n_heads:int = 32
     # ghm (gated hybrid module)
     gate_dim = 4096
     # mlp (multi-layer perceptrom)
@@ -391,9 +394,10 @@ class Block(nn.Module):
         if layer_idx < args.n_diff_attn_layers:
             self.seq_transformation = DLA(args, layer_idx)
         else:
-            n_blocks = args.n_blocks - args.n_diff_attn_layers
-            pass
-            # still developing, not finished yet.
+            if layer_idx - args.n_diff_attn_layers + 1 % (1 // args.pure_attn_ratio) == 0:
+                self.seq_transformation = SSA(args)
+            else:
+                self.seq_transformation = GHM(args)
         self.ffn = MLP(args.dim, args.mlp_dim) if layer_idx < args.n_dense_layers else MoE(args)
         self.norm1 = RMSNorm(args.dim)
         self.norm2 = RMSNorm(args.dim)
@@ -404,8 +408,18 @@ class Block(nn.Module):
 
 class StateFormer(nn.Module):
     # Eternity-V1 StateFormer Model
-    # still developing, not finished yet.
-    pass
-
-
-
+    def __init__(self, args:ModelArgs) -> None :
+        global world_size, rank
+        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        rank = dist.get_rank() if dist.is_initialized() else 0
+        Linear.dtype = torch.float8_e4m3fn if args.dtype == 'fp8' else torch.bfloat16
+        super().__init__()
+        self.max_seq_len = args.max_seq_len
+        self.emb = ParallelEmbedding(args.vocab_size, args.dim, init_weight=None, lora_rank=args.emb_lora_rank)
+        self.layers = torch.nn.ModuleList()
+        for idx in range(args.n_blocks):
+            self.layers.append(Block(args, idx))
+        self.norm = RMSNorm(args.dim)
+        self.final = ColumnParallelLinear(args.dim, args.vocab_size, dtype = torch.get_default_dtype())
+        self.register_buffer("freqs_cis", precompute_freqs_cis(args), persistent=False)
+    
