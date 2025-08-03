@@ -1,5 +1,5 @@
 # Eternity-V1 modeling.py
-# Edited by Haozhe Xu (14), Eternity-LLM Organization (since 2025)
+# Edited by Haozhe Xu (14), Eternity-LLM Organization
 # Based on DeepSeek-V3 (url: https://github.com/deepseek-ai/deepseek-v3/)
 # Note that we use hybrid model (Attention, MLP, MoE, SSM)
 
@@ -441,8 +441,21 @@ class Expert(nn.Module):
 
 class MoE(nn.Module):
     # Mixture of Experts (MoE)
-    # still developing, not finished yet.
-    pass
+    def __init__(self, args:ModelArgs) -> None:
+        super().__init__()
+        self.dim = args.dim
+        assert args.n_routed % world_size == 0, f"Number of routed experts must be divisible by world size (world_size={world_size})"
+        self.n_routed = args.n_routed
+        self.n_local_routed = self.n_routed // world_size
+        self.n_experts_per_tok = args.n_experts_per_tok
+		self.start_idx = rank * self.n_local_routed
+        self.end_idx = self.start_idx + self.n_local_routed
+		self.gate = Gate(args)
+        self.experts = nn.ModuleList([Expert(args.dim, args.moe_dim) if self.start_idx <= i < self.end_idx else None
+                                        for i in range(self.n_routed)])
+        self.shared = MLP(args.dim, args.n_shared * args.moe_dim)
+    
+    
 
 class Block(nn.Module):
     # Eternity-V1 StateFormer Block
