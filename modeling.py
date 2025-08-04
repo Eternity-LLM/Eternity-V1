@@ -63,7 +63,7 @@ class ModelArgs:
     n_experts_per_tok:int = 8
     n_dense_layers:int = 3
     routed_scale:float = 2.5
-    shared_conv_kernel_size:int = 3
+    shared_conv_kernel_size:int = 32
     # rope
     beta_fast:int = 32
     beta_slow:int = 1
@@ -398,15 +398,21 @@ class GHM(nn.Module):
     pass
 
 class MLP(nn.Module):
-    # Multi-Layer Perceptron (MLP)
-    def __init__(self, dim:int, mlp_dim:int) -> None:
+    # Multi-Layer Perceptron (MLP) with seperable convolutional (opt.)
+    def __init__(self, dim:int, mlp_dim:int, use_conv:bool = False, conv_kernel_size:int = 32) -> None:
         super().__init__()
         self.w1 = ColumnParallelLinear(dim, mlp_dim)
         self.w2 = RowParallelLinear(mlp_dim, dim)
         self.w3 = ColumnParallelLinear(dim, mlp_dim)
+        self.conv = None
+        if use_conv:
+            self.conv = SeparableConv1d(dim, mlp_dim, kernel_size=conv_kernel_size, max_batch_size=16)
     
     def forward(self, x:torch.Tensor):
-        return self.w2(u.f_silu(self.w1(x)) * self.w3(x))
+        h = u.f_silu(self.w1(x)) * self.w3(x)
+        if self.conv is not None:
+            h += self.conv(x)
+        return self.w2(h)
 
 class Gate(nn.Module):
     def __init__(self, args:ModelArgs) -> None:
@@ -458,8 +464,25 @@ class MoE(nn.Module):
 		self.gate = Gate(args)
         self.experts = nn.ModuleList([Expert(args.dim, args.moe_dim) if self.start_idx <= i < self.end_idx else None
                                         for i in range(self.n_routed)])
-        self.shared = MLP(args.dim, args.n_shared * args.moe_dim)
+        self.shared = MLP(args.dim, args.n_shared * args.moe_dim, use_conv=True, conv_kernel_size = args.shared_conv_kernel_size) if args.n_shared > 0 else None
     
+    def forward(self, x:torch.Tensor):
+        shape = x.size()
+        x = x.view(-1, self.dim)
+        weights, indices = self.gate(x)
+        y = torch.zeros_like(x)
+        counts = torch.bincount(indices.flatten(), minlength=self.n_routed).tolist()
+        for i in range(self.st_idx, self.en_idx):
+            if counts[i] == 0:
+                continue
+            expert = self.experts[i]
+            idx, top = torch.where(indices == i)
+            y[idx] += expert(x[idx]) * weights[idx, top, None]
+        if world_size > 1:
+            dist.all_reduce(y)
+        if self.shared is not None:
+            y += self.shared(x)
+        return y.view(shape)
     
 
 class Block(nn.Module):
@@ -469,7 +492,7 @@ class Block(nn.Module):
         if layer_idx < args.n_diff_attn_layers:
             self.seq_transformation = DLA(args, layer_idx)
         else:
-            if layer_idx - args.n_diff_attn_layers + 1 % (1 // args.pure_attn_ratio) == 0:
+            if (layer_idx - args.n_diff_attn_layers + 1) % (1 // args.pure_attn_ratio) == 0:
                 self.seq_transformation = SSA(args)
             else:
                 self.seq_transformation = GHM(args)
