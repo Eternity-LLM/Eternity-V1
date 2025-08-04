@@ -51,6 +51,7 @@ class ModelArgs:
     ssm_n_heads:int = 32
     # ghm (gated hybrid module)
     gate_dim = 4096
+    conv_kernel_size:int = 3
     # mlp (multi-layer perceptrom)
     mlp_dim:int = 18432
     # moe (mixture of experts)
@@ -62,6 +63,7 @@ class ModelArgs:
     n_experts_per_tok:int = 8
     n_dense_layers:int = 3
     routed_scale:float = 2.5
+    shared_conv_kernel_size:int = 3
     # rope
     beta_fast:int = 32
     beta_slow:int = 1
@@ -363,9 +365,9 @@ class SSA(nn.Module):
 
 
 class SeparableConv1d(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=True):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=False, max_batch_size=16) -> None:
         super().__init__()
-        
+        self.cache = torch.zeros(max_batch_size, kernel_size, in_channels, dtype=torch.bfloat16)
         self.depthwise = nn.Conv1d(
             in_channels, 
             in_channels, 
@@ -385,6 +387,9 @@ class SeparableConv1d(nn.Module):
         )
 
     def forward(self, x):
+        # x: (batch_size, seq_len, dim)
+        x = x.transpose(1, 2)
+		self.cache = torch.cat(self.cache, x)
         return self.pointwise(self.depthwise(x))
 
 class GHM(nn.Module):
