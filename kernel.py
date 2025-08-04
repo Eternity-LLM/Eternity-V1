@@ -1,10 +1,12 @@
+# This file is based on DeepSeek-V3 (url https://github.com/deepseek-ai/DeepSeek-V3)
+# Edited by Haozhe Xu (14)
+
 from typing import Tuple
 
 import torch
 import triton
 import triton.language as tl
 from triton import Config
-
 
 @triton.jit
 def act_quant_kernel(x_ptr, y_ptr, s_ptr, BLOCK_SIZE: tl.constexpr):
@@ -189,3 +191,5 @@ def fp8_gemm(a: torch.Tensor, a_s: torch.Tensor, b: torch.Tensor, b_s: torch.Ten
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']), triton.cdiv(N, META['BLOCK_SIZE_N']))
     fp8_gemm_kernel[grid](a, b, c, a_s, b_s, M, N, K)
     return c
+
+def depthwise_conv_1d()
