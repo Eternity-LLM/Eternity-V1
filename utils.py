@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from typing import Optional
-from einops import rearrange
+from einops import rearrange, repeat
 
 def f(x):
 	idx_1 = x>=0.
@@ -119,3 +119,5 @@ class StateSpaceAttentionFunction(torch.autograd.Function):
         dK = torch.einsum('bqhv,bql,bqhk,blhv->blhk', grad_output, linear_mask, query, value)
         dV = torch.einsum('bqhv,bql,bqhk,blhk->blhv', grad_output, linear_mask, query, key)
         return dQ, dK, dV, None, None, None
+
+# The following code is copied from https://github.com/state-spaces/mamba/
