@@ -1,6 +1,6 @@
 # Eternity-V1 modeling.py
 # Edited by Haozhe Xu (14), Eternity-LLM Organization
-# Based on DeepSeek-V3 (url: https://github.com/deepseek-ai/deepseek-v3/)
+# Based on DeepSeek-V3 (url https://github.com/deepseek-ai/deepseek-v3/)
 # Note that we use hybrid model (Attention, MLP, MoE, SSM)
 
 from torch import nn
