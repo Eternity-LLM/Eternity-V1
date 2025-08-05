@@ -192,4 +192,3 @@ def fp8_gemm(a: torch.Tensor, a_s: torch.Tensor, b: torch.Tensor, b_s: torch.Ten
     fp8_gemm_kernel[grid](a, b, c, a_s, b_s, M, N, K)
     return c
 
-def depthwise_conv_1d()
