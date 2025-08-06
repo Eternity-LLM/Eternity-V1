@@ -46,12 +46,13 @@ class ModelArgs:
     dla_v_head_dim:int = 128
     dla_n_heads:int = 128
     dla_mscale:float = 1.0
-    # ssm (state space module)
-    state_dim:int = 2048
-    ssm_n_heads:int = 32
     # ghm (gated hybrid module)
     gate_dim = 4096
     conv_kernel_size:int = 3
+    ssm_state_dim:int = 2048
+    ssm_head_dim:int = 64
+    ssm_n_heads:int = 32
+    ssm_lora_rank:int = 512
     # mlp (multi-layer perceptrom)
     mlp_dim:int = 18432
     # moe (mixture of experts)
@@ -361,6 +362,7 @@ class SSA(nn.Module):
         nope_out = nope_out * self.scale
         pe_out = pe_out * self.scale
         output = nope_out + pe_out
+        output = self.wo(output.view(bsz, seqlen, -1))
         return output
 
 
@@ -394,8 +396,24 @@ class SeparableConv1d(nn.Module):
 
 class GHM(nn.Module):
     # Gated Hybrid Module (GHM)
-    # still developing, not finished yet.
-    pass
+    def __init__(self, args:ModelArgs) -> None:
+        super().__init__()
+
+        self.n_heads = args.ssm_n_heads
+        self.state_dim = args.ssm_state_dim
+        self.head_dim = args.ssm_head_dim
+
+        self.attn = SSA(args)
+        self.gate_1 = ColumnParallelLinear(args.dim, args.gate_dim)
+        self.gate_2 = RowParallelLinear(args.gate_dim, 2)
+        self.ssm_linear_proj = Linear(args.dim, args.ssm_lora_rank)
+        # Order: A, B, C, X
+        self.conv = SeparableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_state_dim * 2 + args.ssm_n_heads * args.ssm_head_dim, kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
+        self.ssm_out_proj = Linear(args.ssm_n_heads * args.ssm_head_dim, args.dim)
+    
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
+        # still developing, not finished yet.
+
 
 class MLP(nn.Module):
     # Multi-Layer Perceptron (MLP) with seperable convolutional (opt.)
