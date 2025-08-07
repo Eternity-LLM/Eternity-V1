@@ -358,8 +358,9 @@ class SSA(nn.Module):
 
         nope_out, nope_states = self.function.apply(q_nope, k, v, linear_mask, init_states=self.kv_states, block_len=self.block_len)
         pe_out, pe_states = self.function.apply(q_pe, k_pe, v, linear_mask, init_states=self.pe_states, block_len=self.block_len)
-        self.kv_states = nope_states
-        self.pe_states = pe_states
+        if not self.training:
+        	self.kv_states = nope_states
+        	self.pe_states = pe_states
         nope_out = nope_out * self.scale
         pe_out = pe_out * self.scale
         output = nope_out + pe_out
@@ -405,10 +406,21 @@ class GHM(nn.Module):
     def __init__(self, args:ModelArgs) -> None:
         super().__init__()
 
+		assert args.ssm_n_heads % world_size == 0, f"Number of SSM heads must be divisible by world size (world_size={world_size})"
+        assert args.ssm_state_dim % world_size == 0, f"SSM state dimension must be divisible by world size (world_size={world_size})"
+        assert args.ssm_pe_state_dim % world_size == 0, f"SSM PE state dimension must be divisible by world size (world_size={world_size})"
+		assert args.ssm_head_dim % world_size == 0, f"SSM head dimension must be divisible by world size (world_size={world_size})"
+
+
         self.n_heads = args.ssm_n_heads
         self.state_dim = args.ssm_state_dim
         self.pe_state_dim = args.ssm_pe_state_dim
         self.head_dim = args.ssm_head_dim
+
+        self.part_n_heads = args.ssm_n_heads // world_size
+        self.part_state_dim = args.ssm_state_dim // world_size
+        self.part_pe_state_dim = args.ssm_pe_state_dim // world_size
+        self.part_head_dim = args.ssm_head_dim // world_size
 
         self.attn = SSA(args)
         self.gate_1 = ColumnParallelLinear(args.dim, args.gate_dim)
@@ -419,8 +431,9 @@ class GHM(nn.Module):
                                          kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
         self.pe_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_pe_state_dim * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim,
                                          kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
-        self.ssm_out_proj = Linear(args.ssm_n_heads * args.ssm_head_dim, args.dim)
-    
+        self.ssm_out_proj = RowParallelLinear(args.ssm_n_heads * args.ssm_head_dim, args.dim)
+    	
+
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
         # still developing, not finished yet.
 
