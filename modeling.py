@@ -435,7 +435,19 @@ class GHM(nn.Module):
     	
 
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
+        scores = self.gate_2(u.f_silu(self.gate_1(x)))
+        scores = u.f_sigmoid(scores)
+        scores /= scores.sum(dim=-1, keepdim=True)
+
+        ssa_scores = scores[:, :, :1].squeeze(-1)
+        ssm_scores = scores[:, :, 1:].squeeze(-1)
+
+        ssa_idx = ssa_scores >= ssm_scores
+        ssm_idx = ssa_scores < ssm_scores
+
+        output = torch.zeros_like(x)
         # still developing, not finished yet.
+        pass
 
 
 class MLP(nn.Module):
