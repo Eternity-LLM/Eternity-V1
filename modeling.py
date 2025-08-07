@@ -446,9 +446,36 @@ class GHM(nn.Module):
         ssm_idx = ssa_scores < ssm_scores
 
         output = torch.zeros_like(x)
-        # still developing, not finished yet.
-        pass
+		
+        ssa_inputs = x[ssa_idx]
+        ssm_inputs = x[ssm_idx]
 
+        nope_states = self.attn.kv_states
+        pe_states = self.attn.pe_states
+
+        if ssa_inputs.numel():
+			output[ssa_idx] = self.attn(ssa_inputs, start_pos, freqs_cis, None) * ssa_scores[ssa_idx].unsqueeze(-1)
+            nope_states[ssa_idx] = self.attn.kv_states
+            pe_states[ssa_idx] = self.attn.pe_states
+        if ssm_inputs.numel():
+			h = self.ssm_linear_proj(ssm_inputs)
+            nope_inputs = self.nope_conv(h)
+            pe_inputs = self.pe_conv(h)
+
+            nope_A, nope_B, nope_C, nope_X = torch.split(nope_inputs, [self.part_n_heads, self.part_state_dim * self.n_heads, 
+                                                        self.part_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
+            pe_A, pe_B, pe_C, pe_X = torch.split(pe_inputs, [self.part_n_heads, self.part_pe_state_dim * self.n_heads,
+												self.part_pe_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
+            
+            if world_size > 1:
+                A_nope = [torch.empty_like(nope_A) for _ in range(world_size)]
+                A_pe = [torch.empty_like(pe_A) for _ in range(world_size)]
+                dist.all_gather(A_nope, nope_A)
+                dist.all_gather(A_pe, pe_A)
+                nope_A = torch.cat(A_nope, dim=-1)
+                pe_A = torch.cat(A_pe, dim=-1)
+            # still developing.
+            pass
 
 class MLP(nn.Module):
     # Multi-Layer Perceptron (MLP) with seperable convolutional (opt.)
