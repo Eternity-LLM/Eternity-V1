@@ -49,9 +49,10 @@ class ModelArgs:
     # ghm (gated hybrid module)
     gate_dim = 4096
     conv_kernel_size:int = 3
-    ssm_state_dim:int = 2048
-    ssm_head_dim:int = 64
-    ssm_n_heads:int = 32
+    ssm_state_dim:int = 128
+    ssm_pe_state_dim:int = 64
+    ssm_head_dim:int = 128
+    ssm_n_heads:int = 128
     ssm_lora_rank:int = 512
     # mlp (multi-layer perceptrom)
     mlp_dim:int = 18432
@@ -366,10 +367,13 @@ class SSA(nn.Module):
         return output
 
 
-class SeparableConv1d(nn.Module):
+class ParallelSeperableConv1d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, bias=False, max_batch_size=16) -> None:
         super().__init__()
+        assert out_channels % world_size == 0, f"Output channels must be divisible by world size (world_size={world_size})"
+        self.part_out_channels = out_channels // world_size
         self.cache = torch.zeros(max_batch_size, in_channels, kernel_size, dtype=torch.bfloat16)
+        
         self.depthwise = nn.Conv1d(
             in_channels, 
             in_channels, 
@@ -383,7 +387,7 @@ class SeparableConv1d(nn.Module):
         
         self.pointwise = nn.Conv1d(
             in_channels, 
-            out_channels, 
+            self.part_out_channels, 
             kernel_size=1,
             bias=bias
         )
@@ -391,8 +395,10 @@ class SeparableConv1d(nn.Module):
     def forward(self, x):
         # x: (batch_size, seq_len, dim)
         x = x.transpose(1, 2)
-		self.cache = torch.cat(self.cache, x)[:, :, 1:]
-        return self.pointwise(self.depthwise(self.cache))
+		cache = torch.cat(self.cache, x)[:, :, 1:]
+        if not self.training:
+            self.cache = cache
+        return self.pointwise(self.depthwise(cache))
 
 class GHM(nn.Module):
     # Gated Hybrid Module (GHM)
@@ -401,6 +407,7 @@ class GHM(nn.Module):
 
         self.n_heads = args.ssm_n_heads
         self.state_dim = args.ssm_state_dim
+        self.pe_state_dim = args.ssm_pe_state_dim
         self.head_dim = args.ssm_head_dim
 
         self.attn = SSA(args)
@@ -408,7 +415,10 @@ class GHM(nn.Module):
         self.gate_2 = RowParallelLinear(args.gate_dim, 2)
         self.ssm_linear_proj = Linear(args.dim, args.ssm_lora_rank)
         # Order: A, B, C, X
-        self.conv = SeparableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_state_dim * 2 + args.ssm_n_heads * args.ssm_head_dim, kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
+        self.nope_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_state_dim * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim, 
+                                         kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
+        self.pe_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_pe_state_dim * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim,
+                                         kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
         self.ssm_out_proj = Linear(args.ssm_n_heads * args.ssm_head_dim, args.dim)
     
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
@@ -424,7 +434,7 @@ class MLP(nn.Module):
         self.w3 = ColumnParallelLinear(dim, mlp_dim)
         self.conv = None
         if use_conv:
-            self.conv = SeparableConv1d(dim, mlp_dim, kernel_size=conv_kernel_size, max_batch_size=16)
+            self.conv = ParallelSeperableConv1d(dim, mlp_dim, kernel_size=conv_kernel_size, max_batch_size=16)
     
     def forward(self, x:torch.Tensor):
         h = u.f_silu(self.w1(x)) * self.w3(x)
