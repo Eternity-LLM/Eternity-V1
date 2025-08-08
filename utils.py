@@ -138,7 +138,7 @@ def segsum(x):
     x_segsum = x_segsum.masked_fill(~mask, -torch.inf)
     return x_segsum
 
-def ssd(X, A, B, C, block_len, initial_states=None):
+def ssd(X, A, B, C, block_len:int = 64, initial_states=None):
     #Arguments:
     #    X: (batch, length, n_heads, d_head)
     #    A: (batch, length, n_heads)

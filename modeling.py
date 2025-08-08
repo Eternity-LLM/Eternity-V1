@@ -16,7 +16,7 @@ from . import utils as u
 
 world_size = 1
 rank = 0
-use_deepseek = True # If true, part of the parameters will be fine-tuned from DeepSeek-R1-0528, but model architecture is still Eternity-V1 (hybird model).
+use_deepseek = False # If true, part of the parameters will be fine-tuned from DeepSeek-R1-0528, but model architecture is still Eternity-V1 (hybird model).
 block_size = 128
 gemm_impl = 'bf16'
 
@@ -429,15 +429,16 @@ class GHM(nn.Module):
         # Order: A, B, C, X
         self.nope_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_state_dim * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim, 
                                          kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
-        self.pe_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_pe_state_dim * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim,
+        self.pe_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_pe_state_dim * args.ssm_n_heads * 2,
                                          kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
         self.ssm_out_proj = RowParallelLinear(args.ssm_n_heads * args.ssm_head_dim, args.dim)
     	
 
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
         scores = self.gate_2(u.f_silu(self.gate_1(x)))
-        scores = u.f_sigmoid(scores)
-        scores /= scores.sum(dim=-1, keepdim=True)
+        scores = u.f_sigmoid(scores)                 # (batch_size, seq_len, 2)
+        scores = scores.sum(dim = 1, keepdim=False)  # (batch_size, 2)
+        scores = scores / scores.sum(dim=-1, keepdim=True)
 
         ssa_scores = scores[:, :, :1].squeeze(-1)
         ssm_scores = scores[:, :, 1:].squeeze(-1)
@@ -455,16 +456,17 @@ class GHM(nn.Module):
 
         if ssa_inputs.numel():
 			output[ssa_idx] = self.attn(ssa_inputs, start_pos, freqs_cis, None) * ssa_scores[ssa_idx].unsqueeze(-1)
-            nope_states[ssa_idx] = self.attn.kv_states
-            pe_states[ssa_idx] = self.attn.pe_states
+            if not self.training:
+            	nope_states[ssa_idx] = self.attn.kv_states
+            	pe_states[ssa_idx] = self.attn.pe_states
         if ssm_inputs.numel():
 			h = self.ssm_linear_proj(ssm_inputs)
             nope_inputs = self.nope_conv(h)
             pe_inputs = self.pe_conv(h)
 
-            nope_A, nope_B, nope_C, nope_X = torch.split(nope_inputs, [self.part_n_heads, self.part_state_dim * self.n_heads, 
+            nope_A, nope_B, nope_C, X = torch.split(nope_inputs, [self.part_n_heads, self.part_state_dim * self.n_heads, 
                                                         self.part_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
-            pe_A, pe_B, pe_C, pe_X = torch.split(pe_inputs, [self.part_n_heads, self.part_pe_state_dim * self.n_heads,
+            pe_A, pe_B, pe_C= torch.split(pe_inputs, [self.part_n_heads, self.part_pe_state_dim * self.n_heads,
 												self.part_pe_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
             
             if world_size > 1:
@@ -474,8 +476,20 @@ class GHM(nn.Module):
                 dist.all_gather(A_pe, pe_A)
                 nope_A = torch.cat(A_nope, dim=-1)
                 pe_A = torch.cat(A_pe, dim=-1)
-            # still developing.
-            pass
+            
+            ssm_nope_outputs, ssm_nope_states = u.ssd(X, nope_A, nope_B, nope_C, block_len=self.attn.block_len, initial_states=nope_states)
+            ssm_pe_outputs, ssm_pe_states = u.ssd(X, pe_A, pe_B, pe_C, block_len=self.attn.block_len, initial_states=pe_states)
+            if not self.training:
+                nope_states[ssm_idx] = ssm_nope_states
+                pe_states[ssm_idx] = ssm_pe_states
+            ssm_outputs = ssm_nope_outputs + ssm_pe_outputs
+            ssm_outputs = ssm_outputs * self.attn.scale
+            ssm_outputs = self.ssm_out_proj(ssm_outputs.view(ssm_outputs.size(0), ssm_outputs.size(1), -1))
+            output[ssm_idx] = ssm_outputs * ssm_scores[ssm_idx].unsqueeze(-1)
+        if not self.training:
+            self.attn.kv_states = nope_states
+            self.attn.pe_states = pe_states
+        return output
 
 class MLP(nn.Module):
     # Multi-Layer Perceptron (MLP) with seperable convolutional (opt.)
