@@ -420,16 +420,16 @@ class GHM(nn.Module):
         self.part_n_heads = args.ssm_n_heads // world_size
         self.part_state_dim = args.ssm_state_dim // world_size
         self.part_pe_state_dim = args.ssm_pe_state_dim // world_size
-        self.part_head_dim = args.ssm_head_dim // world_size
+        # self.part_head_dim = args.ssm_head_dim // world_size
 
         self.attn = SSA(args)
         self.gate_1 = ColumnParallelLinear(args.dim, args.gate_dim)
         self.gate_2 = RowParallelLinear(args.gate_dim, 2)
-        self.ssm_linear_proj = Linear(args.dim, args.ssm_lora_rank)
+        self.ssm_linear_proj = Linear(args.dim, args.ssm_lora_rank + args.ssm_head_dim)
         # Order: A, B, C, X
-        self.nope_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_state_dim * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim, 
+        self.nope_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_state_dim * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim, 
                                          kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
-        self.pe_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_n_heads + args.ssm_pe_state_dim * args.ssm_n_heads * 2,
+        self.pe_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_pe_state_dim * args.ssm_n_heads * 2,
                                          kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
         self.ssm_out_proj = RowParallelLinear(args.ssm_n_heads * args.ssm_head_dim, args.dim)
     	
@@ -438,7 +438,6 @@ class GHM(nn.Module):
         scores = self.gate_2(u.f_silu(self.gate_1(x)))
         scores = u.f_sigmoid(scores)                 # (batch_size, seq_len, 2)
         scores = scores.sum(dim = 1, keepdim=False)  # (batch_size, 2)
-        scores = scores / scores.sum(dim=-1, keepdim=True)
 
         ssa_scores = scores[:, :, :1].squeeze(-1)
         ssm_scores = scores[:, :, 1:].squeeze(-1)
@@ -460,25 +459,18 @@ class GHM(nn.Module):
             	nope_states[ssa_idx] = self.attn.kv_states
             	pe_states[ssa_idx] = self.attn.pe_states
         if ssm_inputs.numel():
-			h = self.ssm_linear_proj(ssm_inputs)
+			#h = self.ssm_linear_proj(ssm_inputs)
+            h, A = torch.split(self.ssm_linear_proj(ssm_inputs), [self.ssm_lora_rank, self.head_dim], dim=-1)
             nope_inputs = self.nope_conv(h)
             pe_inputs = self.pe_conv(h)
 
-            nope_A, nope_B, nope_C, X = torch.split(nope_inputs, [self.part_n_heads, self.part_state_dim * self.n_heads, 
+            nope_B, nope_C, X = torch.split(nope_inputs, [self.part_state_dim * self.n_heads, 
                                                         self.part_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
-            pe_A, pe_B, pe_C= torch.split(pe_inputs, [self.part_n_heads, self.part_pe_state_dim * self.n_heads,
+            pe_B, pe_C= torch.split(pe_inputs, [self.part_pe_state_dim * self.n_heads,
 												self.part_pe_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
             
-            if world_size > 1:
-                A_nope = [torch.empty_like(nope_A) for _ in range(world_size)]
-                A_pe = [torch.empty_like(pe_A) for _ in range(world_size)]
-                dist.all_gather(A_nope, nope_A)
-                dist.all_gather(A_pe, pe_A)
-                nope_A = torch.cat(A_nope, dim=-1)
-                pe_A = torch.cat(A_pe, dim=-1)
-            
-            ssm_nope_outputs, ssm_nope_states = u.ssd(X, nope_A, nope_B, nope_C, block_len=self.attn.block_len, initial_states=nope_states)
-            ssm_pe_outputs, ssm_pe_states = u.ssd(X, pe_A, pe_B, pe_C, block_len=self.attn.block_len, initial_states=pe_states)
+            ssm_nope_outputs, ssm_nope_states = u.ssd(X, A, nope_B, nope_C, block_len=self.attn.block_len, initial_states=nope_states)
+            ssm_pe_outputs, ssm_pe_states = u.ssd(X, A, pe_B, pe_C, block_len=self.attn.block_len, initial_states=pe_states)
             if not self.training:
                 nope_states[ssm_idx] = ssm_nope_states
                 pe_states[ssm_idx] = ssm_pe_states
