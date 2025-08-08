@@ -417,10 +417,10 @@ class GHM(nn.Module):
         self.pe_state_dim = args.ssm_pe_state_dim
         self.head_dim = args.ssm_head_dim
 
-        self.part_n_heads = args.ssm_n_heads // world_size
+        # self.part_n_heads = args.ssm_n_heads // world_size
         self.part_state_dim = args.ssm_state_dim // world_size
         self.part_pe_state_dim = args.ssm_pe_state_dim // world_size
-        # self.part_head_dim = args.ssm_head_dim // world_size
+        self.part_head_dim = args.ssm_head_dim // world_size
 
         self.attn = SSA(args)
         self.gate_1 = ColumnParallelLinear(args.dim, args.gate_dim)
@@ -435,6 +435,8 @@ class GHM(nn.Module):
     	
 
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
+        bsz, seq_len, dim = x.size()
+        
         scores = self.gate_2(u.f_silu(self.gate_1(x)))
         scores = u.f_sigmoid(scores)                 # (batch_size, seq_len, 2)
         scores = scores.sum(dim = 1, keepdim=False)  # (batch_size, 2)
@@ -454,12 +456,20 @@ class GHM(nn.Module):
         pe_states = self.attn.pe_states
 
         if ssa_inputs.numel():
+            ssa_nope_states = nope_states[ssa_idx] if nope_states is not None else None
+            ssa_pe_states = pe_states[ssa_idx] if pe_states is not None else None
+            self.attn.kv_states = ssa_nope_states
+            self.attn.pe_states = ssa_pe_states
 			output[ssa_idx] = self.attn(ssa_inputs, start_pos, freqs_cis, None) * ssa_scores[ssa_idx].unsqueeze(-1)
             if not self.training:
+                if nope_states is None:
+                    nope_states = torch.zeros(bsz, self.n_heads, self.part_state_dim, self.part_head_dim)
+                if pe_states is None:
+                    pe_states = torch.zeros(bsz, self.n_heads, self.part_pe_state_dim, self.part_head_dim)
             	nope_states[ssa_idx] = self.attn.kv_states
             	pe_states[ssa_idx] = self.attn.pe_states
+        
         if ssm_inputs.numel():
-			#h = self.ssm_linear_proj(ssm_inputs)
             h, A = torch.split(self.ssm_linear_proj(ssm_inputs), [self.ssm_lora_rank, self.head_dim], dim=-1)
             nope_inputs = self.nope_conv(h)
             pe_inputs = self.pe_conv(h)
@@ -469,8 +479,11 @@ class GHM(nn.Module):
             pe_B, pe_C= torch.split(pe_inputs, [self.part_pe_state_dim * self.n_heads,
 												self.part_pe_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
             
-            ssm_nope_outputs, ssm_nope_states = u.ssd(X, A, nope_B, nope_C, block_len=self.attn.block_len, initial_states=nope_states)
-            ssm_pe_outputs, ssm_pe_states = u.ssd(X, A, pe_B, pe_C, block_len=self.attn.block_len, initial_states=pe_states)
+			ssm_nope_states = nope_states[ssm_idx] if nope_states is not None else None
+            ssm_pe_states = pe_states[ssm_idx] if pe_states is not None else None
+
+            ssm_nope_outputs, ssm_nope_states = u.ssd(X, A, nope_B, nope_C, block_len=self.attn.block_len, initial_states=ssm_nope_states)
+            ssm_pe_outputs, ssm_pe_states = u.ssd(X, A, pe_B, pe_C, block_len=self.attn.block_len, initial_states=ssm_pe_states)
             if not self.training:
                 nope_states[ssm_idx] = ssm_nope_states
                 pe_states[ssm_idx] = ssm_pe_states
