@@ -46,6 +46,7 @@ class ModelArgs:
     dla_v_head_dim:int = 128
     dla_n_heads:int = 128
     dla_mscale:float = 1.0
+    dla_max_attn_score:float = 100.0
     # ghm (gated hybrid module)
     gate_dim = 4096
     conv_kernel_size:int = 3
@@ -266,6 +267,8 @@ class DLA(nn.Module):
         self.register_buffer("kv_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.kv_lora_rank), persistent=False)
         self.register_buffer("pe_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.qk_rope_head_dim), persistent=False)
 
+		self.max_attn_score = args.dla_max_attn_score
+
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
         if self.lambda_ is None:
             lambda_ = torch.exp(self.lambda_q_nope @ self.lambda_k_nope) - torch.exp(self.lambda_q_rope @ self.lambda_k_rope) + self.lambda_init
@@ -290,6 +293,16 @@ class DLA(nn.Module):
         
         nope_scores = torch.einsum('bshc,btc->bsht', q_nope, self.kv_cache[:bsz, :end_pos]) * self.scale
         pe_scores = torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos]) * self.scale
+
+		# QK-Clip. See Kimi-K2: Open Agentic Intelligence (arXiv:2507.20534)
+		nope_max = nope_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
+        pe_max = pe_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
+
+		eta_nope = torch.minimum(self.max_attn_score / (nope_max + 1e-6), torch.ones_like(nope_max))
+        eta_pe = torch.minimum(self.max_attn_score / (pe_max + 1e-6), torch.ones_like(pe_max))
+
+        nope_scores = torch.einsum('bh,bsht->bsht', eta_nope, nope_scores)
+        pe_scores = torch.einsum('bh,bsht->bsht', eta_pe, pe_scores)
 
         if mask is not None:
             mask = mask.unsqueeze(1)
