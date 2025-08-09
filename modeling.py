@@ -492,6 +492,9 @@ class GHM(nn.Module):
             pe_B, pe_C= torch.split(pe_inputs, [self.part_pe_state_dim * self.n_heads,
 												self.part_pe_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
             
+			pe_B = apply_rope(pe_B, freqs_cis)
+            pe_C = apply_rope(pe_C, freqs_cis)
+
 			ssm_nope_states = nope_states[ssm_idx] if nope_states is not None else None
             ssm_pe_states = pe_states[ssm_idx] if pe_states is not None else None
 
