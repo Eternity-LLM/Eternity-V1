@@ -267,7 +267,7 @@ class DLA(nn.Module):
         self.register_buffer("kv_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.kv_lora_rank), persistent=False)
         self.register_buffer("pe_cache", torch.zeros(args.max_batch_size, args.max_seq_len, self.qk_rope_head_dim), persistent=False)
 
-		self.max_attn_score = args.dla_max_attn_score
+        self.max_attn_score = args.dla_max_attn_score
 
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
         if self.lambda_ is None:
@@ -283,7 +283,7 @@ class DLA(nn.Module):
         q_pe = apply_rope(q_pe, freqs_cis)
         kv = self.wkv_a(x)
         kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-        k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis)
+        k_pe = apply_rope(k_pe.unsqueeze(2), freqs_cis)
 
         wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale, block_size) 
         wkv_b = wkv_b.view(self.n_local_heads, -1, self.kv_lora_rank)
@@ -295,10 +295,10 @@ class DLA(nn.Module):
         pe_scores = torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos]) * self.scale
 
 		# QK-Clip. See Kimi-K2: Open Agentic Intelligence (arXiv:2507.20534)
-		nope_max = nope_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
+        nope_max = nope_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
         pe_max = pe_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
 
-		eta_nope = torch.minimum(self.max_attn_score / (nope_max + 1e-6), torch.ones_like(nope_max))
+        eta_nope = torch.minimum(self.max_attn_score / (nope_max + 1e-6), torch.ones_like(nope_max))
         eta_pe = torch.minimum(self.max_attn_score / (pe_max + 1e-6), torch.ones_like(pe_max))
 
         nope_scores = torch.einsum('bh,bsht->bsht', eta_nope, nope_scores)
@@ -364,7 +364,7 @@ class SSA(nn.Module):
 
         kv = self.wkv_a(x)
         kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
-        k_pe = apply_rotary_emb(k_pe.unsqueeze(2), freqs_cis)
+        k_pe = apply_rope(k_pe.unsqueeze(2), freqs_cis)
         kv = self.wkv_b(kv)
         kv = kv.view(bsz, seqlen, self.n_local_heads, -1)
         k, v = torch.split(kv, [self.qk_head_dim, self.v_head_dim], dim=-1)
@@ -373,7 +373,7 @@ class SSA(nn.Module):
         pe_out, pe_states = self.function.apply(q_pe, k_pe, v, linear_mask, init_states=self.pe_states, block_len=self.block_len)
         if not self.training:
         	self.kv_states = nope_states
-        	self.pe_states = pe_states
+            self.pe_states = pe_states
         nope_out = nope_out * self.scale
         pe_out = pe_out * self.scale
         output = nope_out + pe_out
@@ -409,7 +409,7 @@ class ParallelSeperableConv1d(nn.Module):
     def forward(self, x):
         # x: (batch_size, seq_len, dim)
         x = x.transpose(1, 2)
-		cache = torch.cat(self.cache, x)[:, :, 1:]
+        cache = torch.cat(self.cache, x)[:, :, 1:]
         if not self.training:
             self.cache = cache
         return self.pointwise(self.depthwise(cache))
@@ -419,10 +419,10 @@ class GHM(nn.Module):
     def __init__(self, args:ModelArgs) -> None:
         super().__init__()
 
-		assert args.ssm_n_heads % world_size == 0, f"Number of SSM heads must be divisible by world size (world_size={world_size})"
+        assert args.ssm_n_heads % world_size == 0, f"Number of SSM heads must be divisible by world size (world_size={world_size})"
         assert args.ssm_state_dim % world_size == 0, f"SSM state dimension must be divisible by world size (world_size={world_size})"
         assert args.ssm_pe_state_dim % world_size == 0, f"SSM PE state dimension must be divisible by world size (world_size={world_size})"
-		assert args.ssm_head_dim % world_size == 0, f"SSM head dimension must be divisible by world size (world_size={world_size})"
+        assert args.ssm_head_dim % world_size == 0, f"SSM head dimension must be divisible by world size (world_size={world_size})"
 
         self.n_heads = args.ssm_n_heads
         self.state_dim = args.ssm_state_dim
@@ -472,14 +472,14 @@ class GHM(nn.Module):
             ssa_pe_states = pe_states[ssa_idx] if pe_states is not None else None
             self.attn.kv_states = ssa_nope_states
             self.attn.pe_states = ssa_pe_states
-			output[ssa_idx] = self.attn(ssa_inputs, start_pos, freqs_cis, None) * ssa_scores[ssa_idx].unsqueeze(-1)
+            output[ssa_idx] = self.attn(ssa_inputs, start_pos, freqs_cis, None) * ssa_scores[ssa_idx].unsqueeze(-1)
             if not self.training:
                 if nope_states is None:
                     nope_states = torch.zeros(bsz, self.n_heads, self.part_state_dim, self.part_head_dim)
                 if pe_states is None:
                     pe_states = torch.zeros(bsz, self.n_heads, self.part_pe_state_dim, self.part_head_dim)
-            	nope_states[ssa_idx] = self.attn.kv_states
-            	pe_states[ssa_idx] = self.attn.pe_states
+                nope_states[ssa_idx] = self.attn.kv_states
+                pe_states[ssa_idx] = self.attn.pe_states
         
         if ssm_inputs.numel():
             h, A = torch.split(self.ssm_linear_proj(ssm_inputs), [self.ssm_lora_rank, self.head_dim], dim=-1)
@@ -491,10 +491,10 @@ class GHM(nn.Module):
             pe_B, pe_C= torch.split(pe_inputs, [self.part_pe_state_dim * self.n_heads,
 												self.part_pe_state_dim * self.n_heads, self.part_head_dim * self.n_heads], dim=-1)
             
-			pe_B = apply_rope(pe_B, freqs_cis)
+            pe_B = apply_rope(pe_B, freqs_cis)
             pe_C = apply_rope(pe_C, freqs_cis)
 
-			ssm_nope_states = nope_states[ssm_idx] if nope_states is not None else None
+            ssm_nope_states = nope_states[ssm_idx] if nope_states is not None else None
             ssm_pe_states = pe_states[ssm_idx] if pe_states is not None else None
 
             ssm_nope_outputs, ssm_nope_states = u.ssd(X, A, nope_B, nope_C, block_len=self.attn.block_len, initial_states=ssm_nope_states)
@@ -557,7 +557,7 @@ class Gate(nn.Module):
 
 class Expert(nn.Module):
     def __init__(self, dim:int, moe_dim:int):
-        sumer().__init__()
+        super().__init__()
         self.w1 = Linear(dim, moe_dim)
         self.w2 = Linear(moe_dim, dim)
         self.w3 = Linear(dim, moe_dim)
@@ -573,9 +573,9 @@ class MoE(nn.Module):
         self.n_routed = args.n_routed
         self.n_local_routed = self.n_routed // world_size
         self.n_experts_per_tok = args.n_experts_per_tok
-		self.start_idx = rank * self.n_local_routed
+        self.start_idx = rank * self.n_local_routed
         self.end_idx = self.start_idx + self.n_local_routed
-		self.gate = Gate(args)
+        self.gate = Gate(args)
         self.experts = nn.ModuleList([Expert(args.dim, args.moe_dim) if self.start_idx <= i < self.end_idx else None
                                         for i in range(self.n_routed)])
         self.shared = MLP(args.dim, args.n_shared * args.moe_dim, use_conv=True, conv_kernel_size = args.shared_conv_kernel_size) if args.n_shared > 0 else None
