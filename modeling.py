@@ -424,7 +424,6 @@ class GHM(nn.Module):
         assert args.ssm_pe_state_dim % world_size == 0, f"SSM PE state dimension must be divisible by world size (world_size={world_size})"
 		assert args.ssm_head_dim % world_size == 0, f"SSM head dimension must be divisible by world size (world_size={world_size})"
 
-
         self.n_heads = args.ssm_n_heads
         self.state_dim = args.ssm_state_dim
         self.pe_state_dim = args.ssm_pe_state_dim
