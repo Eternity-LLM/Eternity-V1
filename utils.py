@@ -6,6 +6,7 @@ from einops import rearrange, repeat
 def f(x:torch.Tensor):
     idx_1 = x>=0.0
     idx_2 = x<0.0
+    x = x.clone()
     x[idx_1] = (x[idx_1] + 1.0) ** 2
     x[idx_2] = 1.0 / ((x[idx_2] - 1.0) ** 2 )
     return x
@@ -27,6 +28,7 @@ def f_softmax(x, s:float = 3.0, dim:int = -1):
 def m(x):
     idx_1 = x>=0.
     idx_2 = x<0.
+    x = x.clone()
     x[idx_1] = x[idx_1] + 1.
     x[idx_2] = 1. / (1. - x[idx_2])
     return x
@@ -34,6 +36,7 @@ def m(x):
 def g(x):
     idx_1 = x<1.
     idx_2 = x>=1.
+    x = x.clone()
     x[idx_1] = 1.0-torch.rsqrt(x)
     x[idx_2] = torch.sqrt(x)-1.0
     return x
