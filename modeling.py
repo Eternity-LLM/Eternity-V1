@@ -349,11 +349,10 @@ class SSA(nn.Module):
             mscale = 0.1 * args.dla_mscale * math.log(args.rope_factor) + 1.0
             self.scale = self.scale * mscale * mscale
         self.kv_states, self.pe_states = None, None
-        self.function = u.StateSpaceAttentionFunction()
 
-    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, linear_mask:Optional[torch.Tensor]):
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
         bsz, seqlen, _ = x.size()
-        end_pos = start_pos + seqlen
+        # end_pos = start_pos + seqlen
         if self.q_lora_rank == 0:
             q = self.wq(x)
         else:
@@ -369,10 +368,10 @@ class SSA(nn.Module):
         kv = kv.view(bsz, seqlen, self.n_local_heads, -1)
         k, v = torch.split(kv, [self.qk_head_dim, self.v_head_dim], dim=-1)
 
-        nope_out, nope_states = self.function.apply(q_nope, k, v, linear_mask, init_states=self.kv_states, block_len=self.block_len)
-        pe_out, pe_states = self.function.apply(q_pe, k_pe, v, linear_mask, init_states=self.pe_states, block_len=self.block_len)
+        nope_out, nope_states = u.ssa(q_nope, k, v, init_states=self.kv_states, block_len=self.block_len)
+        pe_out, pe_states = u.ssa(q_pe, k_pe, v, init_states=self.pe_states, block_len=self.block_len)
         if not self.training:
-        	self.kv_states = nope_states
+            self.kv_states = nope_states
             self.pe_states = pe_states
         nope_out = nope_out * self.scale
         pe_out = pe_out * self.scale
@@ -613,8 +612,9 @@ class Block(nn.Module):
         self.ffn = MLP(args.dim, args.mlp_dim) if layer_idx < args.n_dense_layers else MoE(args)
         self.norm1 = RMSNorm(args.dim)
         self.norm2 = RMSNorm(args.dim)
-    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
-        x = x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask)
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]=None):
+        x = x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask) if mask is not None else  \
+            x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis)
         x = x + self.ffn(self.norm2(x))
         return x
 
@@ -640,7 +640,7 @@ class StateFormer(nn.Module):
     
     # If you are using this model for inference, then add this line of code:
     # @torch.inference_mode()
-    def forward(self, tokens:torch.Tensor, start_pos:int=0, attn_mask:Optional[torch.Tensor]=None, linear_mask:Optional[torch.Tensor]=None) -> None :
+    def forward(self, tokens:torch.Tensor, start_pos:int=0, attn_mask:Optional[torch.Tensor]=None) -> None :
         seqlen = tokens.size(1)
         h = self.emb(tokens)
         freqs_cis = self.freqs_cis[start_pos:(start_pos+seqlen)]
@@ -649,7 +649,7 @@ class StateFormer(nn.Module):
             if n < self.n_diff_attn_layers:
                 h = layer(h, start_pos, freqs_cis, attn_mask)
             else:
-                h = layer(h, start_pos, freqs_cis, linear_mask)
+                h = layer(h, start_pos, freqs_cis)
             n += 1
         h = self.norm(h)
         logits = self.final(h)
