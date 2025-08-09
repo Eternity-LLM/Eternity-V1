@@ -20,63 +20,104 @@ use_deepseek = False # If true, part of the parameters will be fine-tuned from D
 block_size = 128
 gemm_impl = 'bf16'
 
-@dataclass
 class ModelArgs:
-    max_batch_size:int = 16
-    max_seq_len:int = 163840 #524288
-    dtype:Literal['fp8', 'bf16'] = 'bf16'
-    # embedding
-    dim:int = 7168
-    vocab_size:int = 129280
-    emb_lora_rank:int = 256
-    # ssa (state space attention)
-    q_lora_rank:int = 1536
-    kv_lora_rank:int = 512
-    qk_nope_head_dim:int = 128
-    qk_rope_head_dim:int = 64
-    v_head_dim:int = 128
-    n_heads:int = 128
-    mscale:float = 1.0
-    ssa_block_len:int = 64
-    # dla (differential latent attention)
-    dla_q_lora_rank:int = 1536
-    dla_kv_lora_rank:int = 512
-    dla_qk_nope_head_dim:int = 128
-    dla_qk_rope_head_dim:int = 64
-    dla_v_head_dim:int = 128
-    dla_n_heads:int = 128
-    dla_mscale:float = 1.0
-    dla_max_attn_score:float = 100.0
-    # ghm (gated hybrid module)
-    gate_dim = 4096
-    conv_kernel_size:int = 3
-    ssm_state_dim:int = 128
-    ssm_pe_state_dim:int = 64
-    ssm_head_dim:int = 128
-    ssm_n_heads:int = 128
-    ssm_lora_rank:int = 512
-    # mlp (multi-layer perceptrom)
-    mlp_dim:int = 18432
-    # moe (mixture of experts)
-    moe_dim:int = 2048
-    n_shared:int = 1
-    n_routed:int = 256
-    n_routed_group:int = 8
-    n_topk_group:int = 4
-    n_experts_per_tok:int = 8
-    n_dense_layers:int = 3
-    routed_scale:float = 2.5
-    shared_conv_kernel_size:int = 32
-    # rope
-    beta_fast:int = 32
-    beta_slow:int = 1
-    rope_theta:float = 10000.0
-    rope_factor:float = 40.0
-    original_seq_len:int = 4096
-    # block
-    n_diff_attn_layers:int = 5
-    pure_attn_ratio:float = 0.08
-    n_blocks:int = 61
+    def __init__(
+        self,
+        max_batch_size: int = 16,
+        max_seq_len: int = 163840,  # 524288
+        dtype: Literal['fp8', 'bf16'] = 'bf16',
+        dim: int = 7168,
+        vocab_size: int = 129280,
+        emb_lora_rank: int = 256,
+        q_lora_rank: int = 1536,
+        kv_lora_rank: int = 512,
+        qk_nope_head_dim: int = 128,
+        qk_rope_head_dim: int = 64,
+        v_head_dim: int = 128,
+        n_heads: int = 128,
+        mscale: float = 1.0,
+        ssa_block_len: int = 64,
+        dla_q_lora_rank: int = 1536,
+        dla_kv_lora_rank: int = 512,
+        dla_qk_nope_head_dim: int = 128,
+        dla_qk_rope_head_dim: int = 64,
+        dla_v_head_dim: int = 128,
+        dla_n_heads: int = 128,
+        dla_mscale: float = 1.0,
+        dla_max_attn_score: float = 100.0,
+        gate_dim: int = 4096,
+        conv_kernel_size: int = 3,
+        ssm_state_dim: int = 128,
+        ssm_pe_state_dim: int = 64,
+        ssm_head_dim: int = 128,
+        ssm_n_heads: int = 128,
+        ssm_lora_rank: int = 512,
+        mlp_dim: int = 18432,
+        moe_dim: int = 2048,
+        n_shared: int = 1,
+        n_routed: int = 256,
+        n_routed_group: int = 8,
+        n_topk_group: int = 4,
+        n_experts_per_tok: int = 8,
+        n_dense_layers: int = 3,
+        routed_scale: float = 2.5,
+        shared_conv_kernel_size: int = 32,
+        beta_fast: int = 32,
+        beta_slow: int = 1,
+        rope_theta: float = 10000.0,
+        rope_factor: float = 40.0,
+        original_seq_len: int = 4096,
+        n_diff_attn_layers: int = 5,
+        pure_attn_ratio: float = 0.08,
+        n_blocks: int = 61
+    ):
+        self.max_batch_size = max_batch_size
+        self.max_seq_len = max_seq_len
+        self.dtype = dtype
+        self.dim = dim
+        self.vocab_size = vocab_size
+        self.emb_lora_rank = emb_lora_rank
+        self.q_lora_rank = q_lora_rank
+        self.kv_lora_rank = kv_lora_rank
+        self.qk_nope_head_dim = qk_nope_head_dim
+        self.qk_rope_head_dim = qk_rope_head_dim
+        self.v_head_dim = v_head_dim
+        self.n_heads = n_heads
+        self.mscale = mscale
+        self.ssa_block_len = ssa_block_len
+        self.dla_q_lora_rank = dla_q_lora_rank
+        self.dla_kv_lora_rank = dla_kv_lora_rank
+        self.dla_qk_nope_head_dim = dla_qk_nope_head_dim
+        self.dla_qk_rope_head_dim = dla_qk_rope_head_dim
+        self.dla_v_head_dim = dla_v_head_dim
+        self.dla_n_heads = dla_n_heads
+        self.dla_mscale = dla_mscale
+        self.dla_max_attn_score = dla_max_attn_score
+        self.gate_dim = gate_dim
+        self.conv_kernel_size = conv_kernel_size
+        self.ssm_state_dim = ssm_state_dim
+        self.ssm_pe_state_dim = ssm_pe_state_dim
+        self.ssm_head_dim = ssm_head_dim
+        self.ssm_n_heads = ssm_n_heads
+        self.ssm_lora_rank = ssm_lora_rank
+        self.mlp_dim = mlp_dim
+        self.moe_dim = moe_dim
+        self.n_shared = n_shared
+        self.n_routed = n_routed
+        self.n_routed_group = n_routed_group
+        self.n_topk_group = n_topk_group
+        self.n_experts_per_tok = n_experts_per_tok
+        self.n_dense_layers = n_dense_layers
+        self.routed_scale = routed_scale
+        self.shared_conv_kernel_size = shared_conv_kernel_size
+        self.beta_fast = beta_fast
+        self.beta_slow = beta_slow
+        self.rope_theta = rope_theta
+        self.rope_factor = rope_factor
+        self.original_seq_len = original_seq_len
+        self.n_diff_attn_layers = n_diff_attn_layers
+        self.pure_attn_ratio = pure_attn_ratio
+        self.n_blocks = n_blocks
 
 class ParallelEmbedding(nn.Module):
     # Embedding layer with parallelism support across distributed processes and low-rank adaptation.
