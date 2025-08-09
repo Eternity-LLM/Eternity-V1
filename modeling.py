@@ -20,7 +20,10 @@ use_deepseek = False # If true, part of the parameters will be fine-tuned from D
 block_size = 128
 gemm_impl = 'bf16'
 
+@dataclass
 class ModelArgs:
+    # Model arguments for Eternity-V1
+    model_type = 'eternity_v1'
     def __init__(
         self,
         max_batch_size: int = 16,
