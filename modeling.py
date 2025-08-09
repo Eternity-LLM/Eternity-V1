@@ -29,9 +29,11 @@ class ModelArgs:
         max_batch_size: int = 16,
         max_seq_len: int = 163840,  # 524288
         dtype: Literal['fp8', 'bf16'] = 'bf16',
+        # embedding
         dim: int = 7168,
         vocab_size: int = 129280,
         emb_lora_rank: int = 256,
+        # ssa (state space attention)
         q_lora_rank: int = 1536,
         kv_lora_rank: int = 512,
         qk_nope_head_dim: int = 128,
@@ -40,6 +42,7 @@ class ModelArgs:
         n_heads: int = 128,
         mscale: float = 1.0,
         ssa_block_len: int = 64,
+        # dla (differential latent attention)
         dla_q_lora_rank: int = 1536,
         dla_kv_lora_rank: int = 512,
         dla_qk_nope_head_dim: int = 128,
@@ -48,6 +51,7 @@ class ModelArgs:
         dla_n_heads: int = 128,
         dla_mscale: float = 1.0,
         dla_max_attn_score: float = 100.0,
+        # ghm (gated hybrid module)
         gate_dim: int = 4096,
         conv_kernel_size: int = 3,
         ssm_state_dim: int = 128,
@@ -55,7 +59,9 @@ class ModelArgs:
         ssm_head_dim: int = 128,
         ssm_n_heads: int = 128,
         ssm_lora_rank: int = 512,
+        # mlp (multi-layer perceptron)
         mlp_dim: int = 18432,
+        # moe (mixture of experts)
         moe_dim: int = 2048,
         n_shared: int = 1,
         n_routed: int = 256,
@@ -65,11 +71,13 @@ class ModelArgs:
         n_dense_layers: int = 3,
         routed_scale: float = 2.5,
         shared_conv_kernel_size: int = 32,
+        # rope (rotary position embedding)
         beta_fast: int = 32,
         beta_slow: int = 1,
         rope_theta: float = 10000.0,
         rope_factor: float = 40.0,
         original_seq_len: int = 4096,
+        # block
         n_diff_attn_layers: int = 5,
         pure_attn_ratio: float = 0.08,
         n_blocks: int = 61
