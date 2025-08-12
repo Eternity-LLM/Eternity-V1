@@ -16,9 +16,9 @@ from . import utils as u
 
 world_size = 1
 rank = 0
-use_deepseek = False # If true, part of the parameters will be fine-tuned from DeepSeek-R1-0528, but model architecture is still Eternity-V1 (hybird model).
+use_deepseek:bool = False # If true, part of the parameters will be fine-tuned from DeepSeek-R1-0528, but model architecture is still Eternity-V1 (hybird model).
 block_size = 128
-gemm_impl = 'bf16'
+gemm_impl:Literal['bf16', 'fp8'] = 'bf16'
 
 @dataclass
 class ModelArgs:
@@ -139,6 +139,9 @@ class ParallelEmbedding(nn.Module):
     #     init_weight (optional, torch.tensor or nn.Parameter) : DeepSeek-R1-0528 pretrained params.
     #     lora_rank (int)
 
+    # Outputs:
+    #     Embedded tensor of shape (batch_size, seq_len, dim).
+
     def __init__(self, vocab_size:int, dim:int, init_weight = None, lora_rank:int = 256) -> None :
         super().__init__()
         self.vocabs = vocab_size
@@ -160,8 +163,7 @@ class ParallelEmbedding(nn.Module):
             self.register_parameter('B', None)
         return None
     def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
-        #if padding_mask is not None:
-        #    x[padding_mask] = 0
+        # x: (batch_size, seq_len)
         if world_size > 1:
             mask = (x < self.vocab_start_idx) | (x >= self.vocab_end_idx)
             x = x - self.vocab_start_idx
@@ -193,7 +195,6 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
 
 class Linear(nn.Module):
     dtype = torch.bfloat16
-
     def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
         super().__init__()
         self.in_features = in_features
@@ -248,7 +249,7 @@ class RMSNorm(nn.Module):
     def forward(self, x:torch.Tensor):
         return F.rms_norm(x, (self.dim,), self.weight, self.eps)
 
-# RoPE
+# RoPE (rotary position embedding)
 def precompute_freqs_cis(args:ModelArgs) -> torch.Tensor :
     dim = args.qk_rope_head_dim
     seqlen = args.max_seq_len
@@ -452,7 +453,8 @@ class ParallelSeperableConv1d(nn.Module):
         assert out_channels % world_size == 0, f"Output channels must be divisible by world size (world_size={world_size})"
         self.part_out_channels = out_channels // world_size
         self.cache = torch.zeros(max_batch_size, in_channels, kernel_size, dtype=torch.bfloat16)
-        
+        self.bsz = args.max_batch_size
+
         self.depthwise = nn.Conv1d(
             in_channels, 
             in_channels, 
@@ -474,13 +476,22 @@ class ParallelSeperableConv1d(nn.Module):
     def forward(self, x):
         # x: (batch_size, seq_len, dim)
         x = x.transpose(1, 2)
-        cache = torch.cat(self.cache, x)[:, :, 1:]
+        bsz, _ = x.size()
+
+        if bsz != self.bsz:
+            cache = self.cache[:bsz]
+        else:
+            cache = self.cache
+
+        cache = torch.cat(cache, x)[:, :, 1:]
         if not self.training:
             self.cache = cache
-        return self.pointwise(self.depthwise(cache))
+        return self.pointwise(self.depthwise(cache)).transpose(1, 2)  # (batch_size, seq_len, out_channels)
 
 class GHM(nn.Module):
     # Gated Hybrid Module (GHM)
+    # This module conbines State Space Attention (SSA) and State Space Model (SSM) with a gating mechanism.
+    # The SSM part is based on the SSD model and Mamba-2 Architecture (arXiv:2405.21060v1, Dao and Gu, 2024)
     def __init__(self, args:ModelArgs) -> None:
         super().__init__()
 
@@ -681,6 +692,12 @@ class Block(nn.Module):
         self.norm1 = RMSNorm(args.dim)
         self.norm2 = RMSNorm(args.dim)
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]=None, padding_mask:Optional[torch.Tensor]=None):
+        # Arguments:
+        #     x: (batch_size, seq_len, dim) tensor of embedded tokens.
+        #     start_pos: starting position for the sequence (default: 0).
+        #     freqs_cis: precomputed freqs_cis of rotary position embedding (RoPE).
+        #     mask: optional attention mask for differential attention layers (default: None).
+        #     padding_mask: optional padding mask for the input tokens, with 1s for padding tokens and 0s for non-padding tokens (default: None).
         x = x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask) if mask is not None else  \
             x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis)
         x = x + self.ffn(self.norm2(x)) if padding_mask is not None else \
@@ -710,6 +727,15 @@ class StateFormer(nn.Module):
     # If you are using this model for inference, then add this line of code:
     # @torch.inference_mode()
     def forward(self, tokens:torch.Tensor, start_pos:int=0, attn_mask:Optional[torch.Tensor]=None, padding_mask:Optional[torch.Tensor]=None) -> None :
+        # Eternity-V1 forward pass
+        # Arguments:
+        #   tokens: (batch_size, seq_len) tensor of tokens.
+        #   start_pos: starting position for the sequence (default: 0).
+        #   attn_mask: optional attention mask for differential attention layers (default: None).
+        #   padding_mask: optional padding mask for the input tokens, with 1s for padding tokens and 0s for non-padding tokens (default: None).
+        # Outputs:
+        #   logits: (batch_size, seq_len, vocab_size) tensor of logits for each token in the sequence.
+        
         seqlen = tokens.size(1)
         h = self.emb(tokens, padding_mask)
         freqs_cis = self.freqs_cis[start_pos:(start_pos+seqlen)]
