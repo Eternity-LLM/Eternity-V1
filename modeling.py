@@ -324,6 +324,8 @@ class DLA(nn.Module):
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
         if self.lambda_ is None:
             lambda_ = torch.exp(self.lambda_q_nope @ self.lambda_k_nope) - torch.exp(self.lambda_q_rope @ self.lambda_k_rope) + self.lambda_init
+            if not self.training:
+                self.lambda_ = nn.Parameter(lambda_)
         bsz, seqlen, _ = x.size()
         end_pos = start_pos + seqlen
         if self.q_lora_rank == 0:
@@ -355,33 +357,24 @@ class DLA(nn.Module):
         scores_2 = (torch.einsum('bshc,btc->bsht', q_nope_2, k_nope_2) + \
                    torch.einsum('bshr,btr->bsht', q_pe_2, k_pe_2)) * self.scale
 
-        #nope_scores = torch.einsum('bshc,btc->bsht', q_nope, self.kv_cache[:bsz, :end_pos]) * self.scale
-        #pe_scores = torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos]) * self.scale
-
 		# QK-Clip. See Kimi-K2: Open Agentic Intelligence (arXiv:2507.20534)
-        #nope_max = nope_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
-        #pe_max = pe_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
-
-        #eta_nope = torch.minimum(self.max_attn_score / (nope_max + 1e-6), torch.ones_like(nope_max))
-        #eta_pe = torch.minimum(self.max_attn_score / (pe_max + 1e-6), torch.ones_like(pe_max))
-
-        #nope_scores = torch.einsum('bh,bsht->bsht', eta_nope, nope_scores)
-        #pe_scores = torch.einsum('bh,bsht->bsht', eta_pe, pe_scores)
-
         max_1 = scores_1.view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
         max_2 = scores_2.view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
 
         eta_1 = torch.minimum(self.max_attn_score / (max_1 + 1e-6), torch.tensor(1.0, device=scores_1.device, dtype=scores_1.dtype))
         eta_2 = torch.minimum(self.max_attn_score / (max_2 + 1e-6), torch.tensor(1.0, device=scores_2.device, dtype=scores_2.dtype))
 
+        scores_1 = torch.einsum('bh,bsht->bsht', eta_1, scores_1)
+        scores_2 = torch.einsum('bh,bsht->bsht', eta_2, scores_2)
+
         if mask is not None:
             mask = mask.unsqueeze(1)
-            nope_scores += mask
-            pe_scores += mask
+            scores_1 += mask
+            scores_2 += mask
 
-        nope_weights = u.f_softmax(nope_scores.to(torch.float32), dim=-1)
-        pe_weights = u.f_softmax(pe_scores.to(torch.float32), dim=-1)
-        weights = nope_weights - lambda_ * pe_weights
+        weights_1 = u.f_softmax(scores_1.to(torch.float32), dim=-1)
+        weights_2 = u.f_softmax(scores_2.to(torch.float32), dim=-1)
+        weights = weights_1 - lambda_ * weights_2
         x = torch.einsum('bsht,btc->bshc', weights, self.kv_cache[:bsz, :end_pos])
         x = torch.einsum('bshc,hdc->bshd', x, wkv_b[:, -self.v_head_dim:])
         x = self.wo(x.flatten(2))
