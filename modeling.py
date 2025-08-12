@@ -159,7 +159,9 @@ class ParallelEmbedding(nn.Module):
             self.register_parameter('A', None)
             self.register_parameter('B', None)
         return None
-    def forward(self, x:torch.Tensor):
+    def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
+        #if padding_mask is not None:
+        #    x[padding_mask] = 0
         if world_size > 1:
             mask = (x < self.vocab_start_idx) | (x >= self.vocab_end_idx)
             x = x - self.vocab_start_idx
@@ -171,6 +173,8 @@ class ParallelEmbedding(nn.Module):
         if world_size > 1:
             y[mask] = 0
             dist.all_reduce(y)
+        if padding_mask is not None:
+            y[padding_mask] = 0
         return y
 
 def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -385,7 +389,6 @@ class SSA(nn.Module):
     # Note that this mechanism is equivalent to linear attention  mechanism: $ \bm{Y} = \bm{L} \circ (\bm{Q} \cdot \bm{K}^T) \cdot \bm{V} $ , 
     # where $\circ$ is the element-wise product, $\bm{L}$ is the linear mask, $\bm{Q}$ is the query, $\bm{K}$ is the key, and $\bm{V}$ is the value.
     # I made several changes to the state space dual (SSD) model. For more details of the original SSD model, please read the paper arXiv:2405.21060v1 (Dao and Gu, 2024).
-    # still developing, not finished yet.
     def __init__(self, args:ModelArgs) -> None:
         super().__init__()
         self.dim = args.dim
@@ -600,11 +603,13 @@ class Gate(nn.Module):
         self.routed_scale = args.routed_scale
         self.weight = nn.Parameter(torch.empty(args.n_routed, args.dim))
         self.bias = nn.Parameter(torch.empty(args.n_routed))
-    def forward(self, x:torch.Tensor):
+    def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
         scores = linear(x, self.weight)
         scores = u.f_sigmoid(scores)
         original_scores = scores
         scores += self.bias
+        if padding_mask is not None:
+            scores[padding_mask] = 0
         if self.n_groups > 1 :
             scores = scores.view(x.size(0), self.n_groups, -1)
             group_scores = scores.topk(2, dim = -1)[0].sum(dim = -1)
@@ -642,10 +647,10 @@ class MoE(nn.Module):
                                         for i in range(self.n_routed)])
         self.shared = MLP(args.dim, args.n_shared * args.moe_dim, use_conv=True, conv_kernel_size = args.shared_conv_kernel_size) if args.n_shared > 0 else None
     
-    def forward(self, x:torch.Tensor):
+    def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
         shape = x.size()
         x = x.view(-1, self.dim)
-        weights, indices = self.gate(x)
+        weights, indices = self.gate(x, padding_mask)
         y = torch.zeros_like(x)
         counts = torch.bincount(indices.flatten(), minlength=self.n_routed).tolist()
         for i in range(self.st_idx, self.en_idx):
@@ -675,10 +680,11 @@ class Block(nn.Module):
         self.ffn = MLP(args.dim, args.mlp_dim) if layer_idx < args.n_dense_layers else MoE(args)
         self.norm1 = RMSNorm(args.dim)
         self.norm2 = RMSNorm(args.dim)
-    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]=None):
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]=None, padding_mask:Optional[torch.Tensor]=None):
         x = x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask) if mask is not None else  \
             x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis)
-        x = x + self.ffn(self.norm2(x))
+        x = x + self.ffn(self.norm2(x)) if padding_mask is not None else \
+            x + self.ffn(self.norm2(x, padding_mask))
         return x
 
 class StateFormer(nn.Module):
@@ -703,9 +709,9 @@ class StateFormer(nn.Module):
     
     # If you are using this model for inference, then add this line of code:
     # @torch.inference_mode()
-    def forward(self, tokens:torch.Tensor, start_pos:int=0, attn_mask:Optional[torch.Tensor]=None) -> None :
+    def forward(self, tokens:torch.Tensor, start_pos:int=0, attn_mask:Optional[torch.Tensor]=None, padding_mask:Optional[torch.Tensor]=None) -> None :
         seqlen = tokens.size(1)
-        h = self.emb(tokens)
+        h = self.emb(tokens, padding_mask)
         freqs_cis = self.freqs_cis[start_pos:(start_pos+seqlen)]
         n = 0
         for layer in self.layers:
