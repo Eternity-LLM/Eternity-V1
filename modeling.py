@@ -343,18 +343,36 @@ class DLA(nn.Module):
         self.kv_cache[:bsz, start_pos:end_pos] = kv
         self.pe_cache[:bsz, start_pos:end_pos] = k_pe.squeeze(2)
         
-        nope_scores = torch.einsum('bshc,btc->bsht', q_nope, self.kv_cache[:bsz, :end_pos]) * self.scale
-        pe_scores = torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos]) * self.scale
+        q_nope_1, q_nope_2 = torch.chunk(q_nope, 2, dim=-1)
+        q_pe_1, q_pe_2 = torch.chunk(q_pe, 2, dim=-1)
+
+        k_nope_1, k_nope_2 = torch.chunk(self.kv_cache[:bsz, :end_pos], 2, dim = -1)
+        k_pe_1, k_pe_2 = torch.chunk(self.pe_cache[:bsz, :end_pos], 2, dim = -1)
+
+        scores_1 = (torch.einsum('bshc,btc->bsht', q_nope_1, k_nope_1) + \
+                   torch.einsum('bshr,btr->bsht', q_pe_1, k_pe_1)) * self.scale
+        
+        scores_2 = (torch.einsum('bshc,btc->bsht', q_nope_2, k_nope_2) + \
+                   torch.einsum('bshr,btr->bsht', q_pe_2, k_pe_2)) * self.scale
+
+        #nope_scores = torch.einsum('bshc,btc->bsht', q_nope, self.kv_cache[:bsz, :end_pos]) * self.scale
+        #pe_scores = torch.einsum('bshr,btr->bsht', q_pe, self.pe_cache[:bsz, :end_pos]) * self.scale
 
 		# QK-Clip. See Kimi-K2: Open Agentic Intelligence (arXiv:2507.20534)
-        nope_max = nope_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
-        pe_max = pe_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
+        #nope_max = nope_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
+        #pe_max = pe_scores.view(bsz, self.n_local_heads, -1).max(dim = 1)
 
-        eta_nope = torch.minimum(self.max_attn_score / (nope_max + 1e-6), torch.ones_like(nope_max))
-        eta_pe = torch.minimum(self.max_attn_score / (pe_max + 1e-6), torch.ones_like(pe_max))
+        #eta_nope = torch.minimum(self.max_attn_score / (nope_max + 1e-6), torch.ones_like(nope_max))
+        #eta_pe = torch.minimum(self.max_attn_score / (pe_max + 1e-6), torch.ones_like(pe_max))
 
-        nope_scores = torch.einsum('bh,bsht->bsht', eta_nope, nope_scores)
-        pe_scores = torch.einsum('bh,bsht->bsht', eta_pe, pe_scores)
+        #nope_scores = torch.einsum('bh,bsht->bsht', eta_nope, nope_scores)
+        #pe_scores = torch.einsum('bh,bsht->bsht', eta_pe, pe_scores)
+
+        max_1 = scores_1.view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
+        max_2 = scores_2.view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
+
+        eta_1 = torch.minimum(self.max_attn_score / (max_1 + 1e-6), torch.tensor(1.0, device=scores_1.device, dtype=scores_1.dtype))
+        eta_2 = torch.minimum(self.max_attn_score / (max_2 + 1e-6), torch.tensor(1.0, device=scores_2.device, dtype=scores_2.dtype))
 
         if mask is not None:
             mask = mask.unsqueeze(1)
