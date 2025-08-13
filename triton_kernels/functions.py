@@ -1,4 +1,5 @@
-# Eternity-V1 
+# Eternity-V1 functions
+# Edited by Haozhe Xu (14), Eternity-LLM Organization
 
 import torch
 from .forward_kernels import *
@@ -53,5 +54,27 @@ class WeightDequantFunction(torch.autograd.Function):
         return grad_x, grad_s
 
 class FP8GEMMFunction(torch.autograd.Function):
-    # still developing
-    pass
+    @staticmethod
+    def forward(ctx, a:torch.Tensor, a_s:torch.Tensor, b:torch.Tensor, b_s:torch.Tensor):
+        # Forward pass for FP8 GEMM function
+        # Arguments:
+        #     a (torch.Tensor): The first input matrix, must be contiguous
+        #     a_s (torch.Tensor): The scaling factor for the first input matrix, must be contiguous
+        #     b (torch.Tensor): The second input matrix, must be contiguous
+        #     b_s (torch.Tensor): The scaling factor for the second input matrix, must be contiguous
+
+        # Returns:
+        #     torch.Tensor: The result of the matrix multiplication
+        ctx.save_for_backward(a, a_s, b, b_s)
+        return fp8_gemm(a, a_s, b, b_s)
+    
+    @staticmethod
+    def backward(ctx, grad_y):
+        # Backward pass for FP8 GEMM function
+        # Arguments:
+        #     grad_y (torch.Tensor): Gradient of the output tensor
+        # Returns:
+        #     torch.Tensor: Gradients of the input tensors and their scaling factors
+        a, a_s, b, b_s = ctx.saved_tensors
+        grad_a, grad_b, grad_a_s, grad_b_s = fp8_gemm_backward(grad_y, a, b, a_s, b_s)
+        return grad_a, grad_a_s, grad_b, grad_b_s

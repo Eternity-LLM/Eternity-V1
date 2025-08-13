@@ -1,6 +1,5 @@
 # Eternity-V1 triton kernels for backward operations
-
-# Edited by  Haozhe Xu and DeepSeek-V3-0324
+# Edited by  Haozhe Xu (14) and DeepSeek-V3-0324
 
 from typing import Tuple
 
