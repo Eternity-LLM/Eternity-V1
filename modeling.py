@@ -22,12 +22,12 @@ gemm_impl:Literal['bf16', 'fp8'] = 'bf16'
 
 @dataclass
 class ModelArgs:
-    # Model arguments for Eternity-V1
+    # Model arguments and hyperparameters for Eternity-V1
     model_type = 'eternity_v1'
     def __init__(
         self,
         max_batch_size: int = 16,
-        max_seq_len: int = 163840,  # 524288
+        max_seq_len: int = 163840,
         dtype: Literal['fp8', 'bf16'] = 'bf16',
         # embedding
         dim: int = 7168,
@@ -163,7 +163,14 @@ class ParallelEmbedding(nn.Module):
             self.register_parameter('B', None)
         return None
     def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
-        # x: (batch_size, seq_len)
+        # Forward pass for parallel embedding layer
+        # Args:
+        #     x (torch.Tensor) : Input tensor containing token indices
+        #     padding_mask (optional, torch.Tensor) : Mask for padding tokens with 1s for padding tokens and 0s for non-padding tokens
+        # Returns:
+        #     y (torch.Tensor) : Embedded representations
+        # Raises:
+        #     ValueError: If `world_size` is not defined
         if world_size > 1:
             mask = (x < self.vocab_start_idx) | (x >= self.vocab_end_idx)
             x = x - self.vocab_start_idx
@@ -180,6 +187,16 @@ class ParallelEmbedding(nn.Module):
         return y
 
 def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+    # Applies a linear transformation to the incoming data: $y=xA^T+b$
+    # This function supports specialized implementations based on quantization
+    # and tensor formats
+    # Args:
+    #     x (torch.Tensor) : The input tensor
+    #     weight (torch.Tensor) : The weight tensor which may be quantized and requires
+    #                             dequantization for certain cases
+    #     bias (Optional[torch.Tensor]): The bias tensor to be added, default is None
+    # Returns:
+    #     torch.Tensor: The output tensor after applying the linear transformation
     if weight.element_size() > 1:
         return F.linear(x, weight, bias)
     elif gemm_impl == "bf16":
@@ -753,3 +770,61 @@ class StateFormer(nn.Module):
             dist.all_gather(all_logits, logits)
             logits = torch.cat(all_logits, dim = -1)
         return logits
+
+if __name__ == '__main__':
+    # Train the model in a small scale with random tokens
+    # in order to find out the bugs in the program
+    args = ModelArgs(
+        vocab_size=1000,
+        dim=512,
+        n_blocks=2,
+        n_diff_attn_layers=1,
+        n_dense_layers=1,
+        n_heads=8,
+        n_routed=16,
+        n_experts_per_tok=2,
+        n_topk_group=4,
+        n_routed_group=4,
+        moe_dim=256,
+        emb_lora_rank=0,
+        q_lora_rank=0,
+        kv_lora_rank=0,
+        ssm_lora_rank=0,
+        ssm_n_heads=8,
+        ssm_state_dim=64,
+        ssm_pe_state_dim=32,
+        ssm_head_dim=16,
+        qk_nope_head_dim=8,
+        qk_rope_head_dim=8,
+        v_head_dim=16,
+        mlp_dim=1024,
+        max_seq_len=128,
+        original_seq_len=128,
+        beta_fast=0.5, 
+        beta_slow=1.5, 
+        rope_theta = 10000.0, 
+        rope_factor = 1.0, 
+        dla_n_heads = 8, 
+        dla_qk_nope_head_dim = 4, 
+        dla_qk_rope_head_dim = 4, 
+        dla_v_head_dim = 8, 
+        dla_q_lora_rank = 0, 
+        dla_kv_lora_rank = 0, 
+        dla_mscale = 1.0, 
+        max_batch_size = 16, 
+        dtype='fp8', 
+    )
+    model = StateFormer(args)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    model.train()
+
+    tokens = torch.randint(0, args.vocab_size, (args.max_batch_size, 256))
+    xtrain, ytrain = tokens[:, :-1], tokens[:, 1:]
+    
+    logits = model(xtrain, start_pos=0)
+    loss = criterion(logits, ytrain)
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
