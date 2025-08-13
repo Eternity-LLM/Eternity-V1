@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import Optional
 from einops import rearrange, repeat
+from .triton_kernels.functions import ActQuantFunction, WeightDequantFunction, FP8GEMMFunction
 
 def f(x:torch.Tensor):
     idx_1 = x>=0.0
@@ -51,6 +52,31 @@ def loss(y, y_pred):
     loss = loss.reshape(bsz, seq_len, dim)
     loss = torch.sum(loss, dim=-1)
     return loss
+
+def act_quant(x:torch.Tensor):
+    # Arguments:
+    #     x (torch.Tensor): input tensor to be quantized
+    # Returns:
+    #     torch.Tensor: Output tensor after quantization
+    return ActQuantFunction.apply(x)
+
+def weight_dequant(x:torch.Tensor, s:torch.Tensor):
+    # Arguments:
+    #     x (torch.Tensor): input tensor to be dequantized
+    #     s (torch.Tensor): scale tensor
+    # Returns:
+    #     torch.Tensor: Output tensor after dequantization
+    return WeightDequantFunction.apply(x, s)
+
+def fp8_gemm(a:torch.Tensor, a_s:torch.Tensor, b:torch.Tensor, b_s:torch.Tensor):
+    # Arguments:
+    #     a (torch.Tensor): the first input matrix, must be contiguous
+    #     a_s (torch.Tensor): the scaling factor of the first input matrix, must be contiguous
+    #     b (torch.Tensor): the second input matrix, must be contiguous
+    #     b_s (torch.Tensor): the scaling factor of the second input matrix, must be contiguous
+    # Returns:
+    #     torch.Tensor: the result of the matrix multiplication
+    return FP8GEMMFunction.apply(a, a_s, b, b_s)
 
 # State Space Attention (SSA)
 # This algorithm is based on SSD algorithm, however, I made a few changes.
