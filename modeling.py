@@ -16,7 +16,6 @@ from . import utils as u
 
 world_size = 1
 rank = 0
-use_deepseek:bool = False # If true, part of the parameters will be fine-tuned from DeepSeek-R1-0528, but model architecture is still Eternity-V1 (hybird model).
 block_size = 128
 gemm_impl:Literal['bf16', 'fp8'] = 'bf16'
 
@@ -152,9 +151,7 @@ class ParallelEmbedding(nn.Module):
         self.en_idx = self.st_idx + self.part_vocab_size
         self.rank = lora_rank
         self.weight = nn.Parameter(init_weight[self.st_idx:(self.en_idx+1), :]) if init_weight else nn.Parameter(torch.empty(self.part_vocab_size, self.dim))
-        if use_deepseek:
-            self.weight.requires_grad = False
-        
+
         if lora_rank:
             self.A = nn.Parameter(torch.empty(self.part_vocab_size, lora_rank))
             self.B = nn.Parameter(torch.empty(lora_rank, self.part_vocab_size))
@@ -775,44 +772,44 @@ if __name__ == '__main__':
     # Train the model in a small scale with random tokens
     # in order to find out the bugs in the program
     args = ModelArgs(
-        vocab_size=1000,
-        dim=512,
-        n_blocks=2,
-        n_diff_attn_layers=1,
-        n_dense_layers=1,
-        n_heads=8,
-        n_routed=16,
-        n_experts_per_tok=2,
-        n_topk_group=4,
-        n_routed_group=4,
-        moe_dim=256,
-        emb_lora_rank=0,
-        q_lora_rank=0,
-        kv_lora_rank=0,
-        ssm_lora_rank=0,
-        ssm_n_heads=8,
-        ssm_state_dim=64,
-        ssm_pe_state_dim=32,
-        ssm_head_dim=16,
-        qk_nope_head_dim=8,
-        qk_rope_head_dim=8,
-        v_head_dim=16,
-        mlp_dim=1024,
-        max_seq_len=128,
-        original_seq_len=128,
-        beta_fast=0.5, 
-        beta_slow=1.5, 
-        rope_theta = 10000.0, 
-        rope_factor = 1.0, 
-        dla_n_heads = 8, 
-        dla_qk_nope_head_dim = 4, 
-        dla_qk_rope_head_dim = 4, 
-        dla_v_head_dim = 8, 
-        dla_q_lora_rank = 0, 
-        dla_kv_lora_rank = 0, 
-        dla_mscale = 1.0, 
-        max_batch_size = 16, 
-        dtype='fp8', 
+        max_batch_size = 4,
+        max_seq_len = 512,
+        dtype = 'fp8',
+        dim = 1024,
+        vocab_size = 100,
+        emb_lora_rank = 0,
+        q_lora_rank = 64,
+        kv_lora_rank = 32,
+        qk_nope_head_dim = 128,
+        qk_rope_head_dim = 64,
+        v_head_dim = 128,
+        n_heads = 16,
+        mscale = 1.0,
+        ssa_block_len = 64,
+        dla_q_lora_rank = 64,
+        dla_kv_lora_rank = 32,
+        dla_qk_nope_head_dim = 128,
+        dla_qk_rope_head_dim = 64,
+        dla_v_head_dim = 128,
+        dla_n_heads = 16,
+        dla_mscale = 1.0,
+        dla_max_attn_score = 100.0,
+        gate_dim = 256,
+        ssm_n_heads = 16,
+        ssm_lora_rank = 32,
+        mlp_dim = 4096,
+        moe_dim = 128,
+        n_shared = 1,
+        n_routed = 16,
+        n_routed_group = 2,
+        n_topk_group = 1,
+        n_experts_per_tok = 4,
+        n_dense_layers = 1,
+        shared_conv_kernel_size = 6,
+        original_seq_len = 128,
+        n_diff_attn_layers = 2,
+        pure_attn_ratio = 0.08,
+        n_blocks = 20
     )
     model = StateFormer(args)
 
@@ -822,8 +819,10 @@ if __name__ == '__main__':
 
     tokens = torch.randint(0, args.vocab_size, (args.max_batch_size, 256))
     xtrain, ytrain = tokens[:, :-1], tokens[:, 1:]
+    padding_mask = torch.zeros_like(xtrain)
+    padding_mask[:,64:]=1
     
-    logits = model(xtrain, start_pos=0)
+    logits = model(xtrain,padding_mask = padding_mask, start_pos=0)
     loss = criterion(logits, ytrain)
     loss.backward()
     optimizer.step()
