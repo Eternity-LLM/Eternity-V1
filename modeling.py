@@ -818,6 +818,9 @@ if '--test' in sys.argv or '-t' in sys.argv or '/t' in sys.argv:
 
     print('Model created successfully.')
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('Using device: ','cuda' if torch.cuda.is_available() else 'cpu')
+
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     model.train()
