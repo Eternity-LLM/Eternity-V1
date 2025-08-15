@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from typing import Optional
 from einops import rearrange, repeat
-from .triton_kernels.functions import ActQuantFunction, WeightDequantFunction, FP8GEMMFunction
+from triton_kernels.functions import ActQuantFunction, WeightDequantFunction, FP8GEMMFunction
 
 def f(x:torch.Tensor):
     idx_1 = x>=0.0

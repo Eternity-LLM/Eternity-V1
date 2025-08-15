@@ -8,10 +8,10 @@ from torch.nn import functional as F
 from torch import distributed as dist
 from dataclasses import dataclass
 from typing import Tuple, Optional, Literal
-from .utils import act_quant, weight_dequant, fp8_gemm
+from utils import act_quant, weight_dequant, fp8_gemm
 import torch
 import math
-from . import utils as u
+import utils as u
 
 import sys
 
