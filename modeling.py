@@ -13,6 +13,8 @@ import torch
 import math
 from . import utils as u
 
+import sys
+
 
 world_size = 1
 rank = 0
@@ -768,9 +770,10 @@ class StateFormer(nn.Module):
             logits = torch.cat(all_logits, dim = -1)
         return logits
 
-if __name__ == '__main__':
+if '--test' in sys.argv or '-t' in sys.argv or '/t' in sys.argv:
     # Train the model in a small scale with random tokens
     # in order to find out the bugs in the program
+    print(f'Testing modeling.py ({__name__}).')
     args = ModelArgs(
         max_batch_size = 4,
         max_seq_len = 512,
@@ -813,6 +816,8 @@ if __name__ == '__main__':
     )
     model = StateFormer(args)
 
+    print('Model created successfully.')
+
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     model.train()
@@ -822,8 +827,20 @@ if __name__ == '__main__':
     padding_mask = torch.zeros_like(xtrain)
     padding_mask[:,64:]=1
     
-    logits = model(xtrain,padding_mask = padding_mask, start_pos=0)
-    loss = criterion(logits, ytrain)
-    loss.backward()
-    optimizer.step()
-    optimizer.zero_grad()
+    print('Start training...')
+    for i in range(100):
+        logits = model(xtrain,padding_mask = padding_mask, start_pos=0)
+        loss = criterion(logits, ytrain)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        print(f'Epoch {i+1} completed.')
+    print('Program tested successfully.')
+
+elif '\?' in sys.argv or '-?' in sys.argv or '--help' in sys.argv:
+    print(f'{sys.argv[0]} <command>')
+    print(
+'''Commands:
+    --test    -t    /t : Test program with random tokens
+    --help    -?    /? : Show this message
+''')
