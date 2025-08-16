@@ -778,7 +778,7 @@ if '--test' in sys.argv or '-t' in sys.argv or '/t' in sys.argv:
     args = ModelArgs(
         max_batch_size = 4,
         max_seq_len = 512,
-        dtype = 'fp8',
+        dtype = 'bf16',
         dim = 1024,
         vocab_size = 100,
         emb_lora_rank = 0,
