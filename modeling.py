@@ -374,7 +374,7 @@ class DLA(nn.Module):
         k_pe_1, k_pe_2 = torch.chunk(self.pe_cache[:bsz, :end_pos], 2, dim = -1)
 
         scores_1 = (torch.einsum('bshc,btc->bsht', q_nope_1.to(torch.float16), k_nope_1.to(torch.float16)) + \
-                   torch.einsum('bshr,btr->bsht', q_pe_1.to(torch.float(16)), k_pe_1.to(torch.float16))) * self.scale
+                   torch.einsum('bshr,btr->bsht', q_pe_1.to(torch.float16), k_pe_1.to(torch.float16))) * self.scale
         
         scores_2 = (torch.einsum('bshc,btc->bsht', q_nope_2.to(torch.float16), k_nope_2.to(torch.float16)) + \
                    torch.einsum('bshr,btr->bsht', q_pe_2.to(torch.float16), k_pe_2.to(torch.float16))) * self.scale
