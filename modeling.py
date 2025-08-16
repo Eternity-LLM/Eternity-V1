@@ -342,7 +342,7 @@ class DLA(nn.Module):
 
         self.max_attn_score = args.dla_max_attn_score
 
-    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor] = None):
         if self.training:
             self.lambda_ = None
         if self.lambda_ is None:
