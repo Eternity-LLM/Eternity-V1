@@ -7,6 +7,7 @@ import torch
 import triton
 import triton.language as tl
 from triton import Config
+from .forward_kernels import fp8_gemm_configs
 
 @triton.jit
 def act_quant_backward_kernel(
