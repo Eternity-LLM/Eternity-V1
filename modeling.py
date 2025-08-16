@@ -185,7 +185,7 @@ class ParallelEmbedding(nn.Module):
             y[padding_mask] = 0
         return y
 
-def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None, use_scale:bool=False) -> torch.Tensor:
     # Applies a linear transformation to the incoming data: $y=xA^T+b$
     # This function supports specialized implementations based on quantization
     # and tensor formats
@@ -196,7 +196,7 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
     #     bias (Optional[torch.Tensor]): The bias tensor to be added, default is None
     # Returns:
     #     torch.Tensor: The output tensor after applying the linear transformation
-    if weight.element_size() > 1:
+    if weight.element_size() > 1 or not use_scale:
         return F.linear(x, weight, bias)
     elif gemm_impl == "bf16":
         weight = weight_dequant(weight, weight.scale)
@@ -211,12 +211,12 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
 
 class Linear(nn.Module):
     dtype = torch.bfloat16
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool=False):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
         self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype=dtype or Linear.dtype))
-        if self.weight.element_size() == 1:
+        if self.weight.element_size() == 1 and use_scale:
             scale_out_features = (out_features + block_size - 1) // block_size
             scale_in_features = (in_features + block_size - 1) // block_size
             self.weight.scale = self.scale = nn.Parameter(torch.empty(scale_out_features, scale_in_features, dtype=torch.float32))
@@ -226,9 +226,10 @@ class Linear(nn.Module):
             self.bias = nn.Parameter(torch.empty(out_features))
         else:
             self.register_parameter("bias", None)
+        self.use_scale = use_scale
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return linear(x, self.weight, self.bias)
+        return linear(x, self.weight, self.bias, self.use_scale)
 
 
 class ColumnParallelLinear(Linear):
