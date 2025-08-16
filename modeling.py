@@ -185,7 +185,7 @@ class ParallelEmbedding(nn.Module):
             y[padding_mask] = 0
         return y
 
-def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None, use_scale:bool=False) -> torch.Tensor:
+def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None, use_scale:bool=True) -> torch.Tensor:
     # Applies a linear transformation to the incoming data: $y=xA^T+b$
     # This function supports specialized implementations based on quantization
     # and tensor formats
@@ -373,11 +373,11 @@ class DLA(nn.Module):
         k_nope_1, k_nope_2 = torch.chunk(self.kv_cache[:bsz, :end_pos], 2, dim = -1)
         k_pe_1, k_pe_2 = torch.chunk(self.pe_cache[:bsz, :end_pos], 2, dim = -1)
 
-        scores_1 = (torch.einsum('bshc,btc->bsht', q_nope_1, k_nope_1) + \
-                   torch.einsum('bshr,btr->bsht', q_pe_1, k_pe_1)) * self.scale
+        scores_1 = (torch.einsum('bshc,btc->bsht', q_nope_1.to(torch.float16), k_nope_1.to(torch.float16)) + \
+                   torch.einsum('bshr,btr->bsht', q_pe_1.to(torch.float(16)), k_pe_1.to(torch.float16))) * self.scale
         
-        scores_2 = (torch.einsum('bshc,btc->bsht', q_nope_2, k_nope_2) + \
-                   torch.einsum('bshr,btr->bsht', q_pe_2, k_pe_2)) * self.scale
+        scores_2 = (torch.einsum('bshc,btc->bsht', q_nope_2.to(torch.float16), k_nope_2.to(torch.float16)) + \
+                   torch.einsum('bshr,btr->bsht', q_pe_2.to(torch.float16), k_pe_2.to(torch.float16))) * self.scale
 
 		# QK-Clip. See Kimi-K2: Open Agentic Intelligence (arXiv:2507.20534)
         max_1 = scores_1.view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
@@ -386,8 +386,8 @@ class DLA(nn.Module):
         eta_1 = torch.minimum(self.max_attn_score / (max_1 + 1e-6), torch.tensor(1.0, device=scores_1.device, dtype=scores_1.dtype))
         eta_2 = torch.minimum(self.max_attn_score / (max_2 + 1e-6), torch.tensor(1.0, device=scores_2.device, dtype=scores_2.dtype))
 
-        scores_1 = torch.einsum('bh,bsht->bsht', eta_1, scores_1)
-        scores_2 = torch.einsum('bh,bsht->bsht', eta_2, scores_2)
+        scores_1 = torch.einsum('bh,bsht->bsht', eta_1.to(torch.float16), scores_1).to(torch.bfloat16)
+        scores_2 = torch.einsum('bh,bsht->bsht', eta_2.to(torch.float16), scores_2).to(torch.bfloat16)
 
         if mask is not None:
             mask = mask.unsqueeze(1)
