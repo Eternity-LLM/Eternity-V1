@@ -397,8 +397,8 @@ class DLA(nn.Module):
         weights_1 = u.f_softmax(scores_1.to(torch.float32), dim=-1)
         weights_2 = u.f_softmax(scores_2.to(torch.float32), dim=-1)
         weights = weights_1 - lambda_ * weights_2
-        x = torch.einsum('bsht,btc->bshc', weights, self.kv_cache[:bsz, :end_pos])
-        x = torch.einsum('bshc,hdc->bshd', x, wkv_b[:, -self.v_head_dim:])
+        x = torch.einsum('bsht,btc->bshc', weights, self.kv_cache[:bsz, :end_pos].to(torch.float32))
+        x = torch.einsum('bshc,hdc->bshd', x, wkv_b[:, -self.v_head_dim:].to(torch.float32))
         x = self.wo(x.flatten(2))
         return x
 
