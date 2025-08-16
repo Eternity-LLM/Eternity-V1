@@ -213,7 +213,7 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
 
 class Linear(nn.Module):
     dtype = torch.bfloat16
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool=False):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool=True):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -235,14 +235,14 @@ class Linear(nn.Module):
 
 
 class ColumnParallelLinear(Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool = False):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool = True):
         assert out_features % world_size == 0, f"Output features must be divisible by world size (world_size={world_size})"
         self.part_out_features = out_features // world_size
         super().__init__(in_features, self.part_out_features, bias, dtype, use_scale)
 
 
 class RowParallelLinear(Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool = False):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool = True):
         assert in_features % world_size == 0, f"Input features must be divisible by world size (world_size={world_size})"
         self.part_in_features = in_features // world_size
         super().__init__(self.part_in_features, out_features, bias, dtype, use_scale)
@@ -361,7 +361,7 @@ class DLA(nn.Module):
         kv, k_pe = torch.split(kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1)
         k_pe = apply_rope(k_pe.unsqueeze(2), freqs_cis)
 
-        wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale, block_size) 
+        wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale) 
         wkv_b = wkv_b.view(self.n_local_heads, -1, self.kv_lora_rank)
         q_nope = torch.einsum("bshd,hdc->bshc", q_nope, wkv_b[:, :self.qk_nope_head_dim])
         self.kv_cache[:bsz, start_pos:end_pos] = kv
