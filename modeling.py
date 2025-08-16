@@ -647,7 +647,7 @@ class Gate(nn.Module):
         indices = torch.topk(scores, self.topk, dim = -1)[1]
         weights = original_scores.gather(1, indices)
         weights /= weights.sum(dim=-1, keepdim=True)
-        weights *= self.route_scale
+        weights *= self.routed_scale
         return weights.type_as(x), indices
 
 class Expert(nn.Module):
