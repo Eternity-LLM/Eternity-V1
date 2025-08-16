@@ -718,7 +718,7 @@ class Block(nn.Module):
         x = x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask) if mask is not None else  \
             x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis)
         x = x + self.ffn(self.norm2(x)) if padding_mask is not None else \
-            x + self.ffn(self.norm2(x, padding_mask))
+            x + self.ffn(self.norm2(x), padding_mask)
         return x
 
 class StateFormer(nn.Module):
