@@ -492,7 +492,7 @@ class ParallelSeperableConv1d(nn.Module):
 
     def forward(self, x):
         # x: (batch_size, seq_len, dim)
-        x = x.transpose(1, 2)
+        x = x.transpose(0, 1)
         bsz, _ = x.size()
 
         if bsz != self.bsz:
