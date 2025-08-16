@@ -198,7 +198,7 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
     #     torch.Tensor: The output tensor after applying the linear transformation
     
     if weight.element_size() > 1 or not use_scale:
-        weight = weight.to(x.dtype)
+        x = x.to(weight.dtype)
         return F.linear(x, weight, bias)
     elif gemm_impl == "bf16":
         weight = weight_dequant(weight, weight.scale)
