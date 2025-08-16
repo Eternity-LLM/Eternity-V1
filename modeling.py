@@ -500,7 +500,7 @@ class ParallelSeperableConv1d(nn.Module):
         else:
             cache = self.cache
 
-        cache = torch.cat(cache, x)[:, :, 1:]
+        cache = torch.cat((cache, x), dim=-1)[:, :, 1:]
         if not self.training:
             self.cache = cache
         return self.pointwise(self.depthwise(cache)).transpose(1, 2)  # (batch_size, seq_len, out_channels)
