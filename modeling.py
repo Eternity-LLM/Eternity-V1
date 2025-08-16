@@ -615,7 +615,7 @@ class MLP(nn.Module):
         if use_conv:
             self.conv = ParallelSeperableConv1d(dim, mlp_dim, kernel_size=conv_kernel_size, max_batch_size=16)
     
-    def forward(self, x:torch.Tensor):
+    def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor] = None):
         h = u.f_silu(self.w1(x)) * self.w3(x)
         if self.conv is not None:
             h += self.conv(x)
