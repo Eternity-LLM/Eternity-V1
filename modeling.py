@@ -196,6 +196,7 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
     #     bias (Optional[torch.Tensor]): The bias tensor to be added, default is None
     # Returns:
     #     torch.Tensor: The output tensor after applying the linear transformation
+    
     if weight.element_size() > 1 or not use_scale:
         return F.linear(x, weight, bias)
     elif gemm_impl == "bf16":
@@ -233,24 +234,20 @@ class Linear(nn.Module):
 
 
 class ColumnParallelLinear(Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool = False):
         assert out_features % world_size == 0, f"Output features must be divisible by world size (world_size={world_size})"
         self.part_out_features = out_features // world_size
-        super().__init__(in_features, self.part_out_features, bias, dtype)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = linear(x, self.weight, self.bias)
-        return y
+        super().__init__(in_features, self.part_out_features, bias, dtype, use_scale)
 
 
 class RowParallelLinear(Linear):
-    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None):
+    def __init__(self, in_features: int, out_features: int, bias: bool = False, dtype = None, use_scale:bool = False):
         assert in_features % world_size == 0, f"Input features must be divisible by world size (world_size={world_size})"
         self.part_in_features = in_features // world_size
-        super().__init__(self.part_in_features, out_features, bias, dtype)
+        super().__init__(self.part_in_features, out_features, bias, dtype, use_scale)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y = linear(x, self.weight)
+        y = linear(x, self.weight, use_scale=self.use_scale)
         if world_size > 1:
             dist.all_reduce(y)
         if self.bias is not None:
