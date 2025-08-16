@@ -320,10 +320,10 @@ class DLA(nn.Module):
         self.qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
 
         self.lambda_init = 0.8 - 0.6 * torch.exp(torch.tensor(-0.3 * layer_idx))
-        self.lambda_q_nope = nn.Parameter(torch.tensor(self.qk_nope_head_dim))
-        self.lambda_q_rope = nn.Parameter(torch.tensor(self.qk_rope_head_dim))
-        self.lambda_k_nope = nn.Parameter(torch.tensor(self.qk_nope_head_dim))
-        self.lambda_k_rope = nn.Parameter(torch.tensor(self.qk_rope_head_dim))
+        self.lambda_q_nope = nn.Parameter(torch.zeros(self.qk_nope_head_dim))
+        self.lambda_q_rope = nn.Parameter(torch.zeros(self.qk_rope_head_dim))
+        self.lambda_k_nope = nn.Parameter(torch.zeros(self.qk_nope_head_dim))
+        self.lambda_k_rope = nn.Parameter(torch.zeros(self.qk_rope_head_dim))
         self.register_parameter("lambda_", None)
         if self.q_lora_rank == 0:
             self.wq = ColumnParallelLinear(self.dim, self.n_heads * self.qk_head_dim)
