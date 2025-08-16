@@ -319,7 +319,7 @@ class DLA(nn.Module):
         self.v_head_dim = args.dla_v_head_dim
         self.qk_head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim
 
-        self.lambda_init = 0.8 - 0.6 * torch.exp(-0.3 * layer_idx)
+        self.lambda_init = 0.8 - 0.6 * torch.exp(torch.tensor(-0.3 * layer_idx))
         self.lambda_q_nope = nn.Parameter(torch.tensor(self.qk_nope_head_dim))
         self.lambda_q_rope = nn.Parameter(torch.tensor(self.qk_rope_head_dim))
         self.lambda_k_nope = nn.Parameter(torch.tensor(self.qk_nope_head_dim))
@@ -343,6 +343,8 @@ class DLA(nn.Module):
         self.max_attn_score = args.dla_max_attn_score
 
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]):
+        if self.training:
+            self.lambda_ = None
         if self.lambda_ is None:
             lambda_ = torch.exp(self.lambda_q_nope @ self.lambda_k_nope) - torch.exp(self.lambda_q_rope @ self.lambda_k_rope) + self.lambda_init
             if not self.training:
