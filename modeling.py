@@ -606,11 +606,12 @@ class GHM(nn.Module):
         self.gate_2 = RowParallelLinear(args.gate_dim, 2)
         self.ssm_linear_proj = Linear(args.dim, args.ssm_lora_rank + args.ssm_head_dim)
         # Order: A, B, C, X
-        self.conv = ParallelSeperableConv1d(args.ssm_lora_rank, (args.ssm_state_dim + args.ssm_pe_state_dim) * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim)
-        self.nope_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_state_dim * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim, 
-                                         kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
-        self.pe_conv = ParallelSeperableConv1d(args.ssm_lora_rank, args.ssm_pe_state_dim * args.ssm_n_heads * 2,
-                                         kernel_size=args.conv_kernel_size, max_batch_size=args.max_batch_size)
+        self.conv = ParallelSeperableConv1d(
+            args.ssm_lora_rank,
+            (args.ssm_state_dim + args.ssm_pe_state_dim) * args.ssm_n_heads * 2 + args.ssm_n_heads * args.ssm_head_dim,
+            kernel_size=args.conv_kernel_size,
+            max_batch_size=args.max_batch_size
+        )
         self.ssm_out_proj = RowParallelLinear(args.ssm_n_heads * args.ssm_head_dim, args.dim)
     	
 
