@@ -378,8 +378,8 @@ class DLA(nn.Module):
             k_nope_1, k_nope_2 = torch.chunk(k_nope, 2, dim=-1)
             k_pe_1, k_pe_2 = torch.chunk(k_pe, 2, dim=-1)
 
-            k_1 = torch.cat((k_nope_1, k_pe_1), dim=-1)
-            k_2 = torch.cat((k_nope_2, k_pe_2), dim=-1)
+            k_1 = torch.cat((k_nope_1, k_pe_1.expand(-1, -1, self.n_local_heads, -1)), dim=-1)
+            k_2 = torch.cat((k_nope_2, k_pe_2.expand(-1, -1, self.n_local_heads, -1)), dim=-1)
 
             self.k_cache_1[:bsz, start_pos:end_pos] = k_1
             self.k_cache_2[:bsz, start_pos:end_pos] = k_2
