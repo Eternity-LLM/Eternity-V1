@@ -524,7 +524,7 @@ class SSA(nn.Module):
 
         if attn_impl == 'naive':
             q = torch.cat((q_nope, q_pe), dim=-1)
-            k = torch.cat((k, k_pe), dim=-1)
+            k = torch.cat((k, k_pe.expand(-1, -1, self.n_local_heads, -1)), dim=-1)
             output, states = u.ssa(q.to(torch.float32), k.to(torch.float32), v.to(torch.float32), initial_states=self.kv_states, block_len=self.block_len)
         else:
             nope_out, nope_states = u.ssa(q_nope.to(torch.float32), k.to(torch.float32), v.to(torch.float32), initial_states=self.kv_states, block_len=self.block_len)
