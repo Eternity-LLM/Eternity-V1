@@ -376,6 +376,7 @@ class DLA(nn.Module):
             kv = kv.view(bsz, seqlen, self.n_local_heads, self.qk_nope_head_dim + self.v_head_dim)
             k_nope, v = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
             k_nope_1, k_nope_2 = torch.chunk(k_nope, 2, dim=-1)
+            k_pe_1, k_pe_2 = torch.chunk(k_pe, 2, dim=-1)
 
             k_1 = torch.cat((k_nope_1, k_pe_1), dim=-1)
             k_2 = torch.cat((k_nope_2, k_pe_2), dim=-1)
