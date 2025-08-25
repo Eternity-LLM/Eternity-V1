@@ -385,8 +385,8 @@ class DLA(nn.Module):
             self.k_cache_2[:bsz, start_pos:end_pos] = k_2
             self.v_cache[:bsz, start_pos:end_pos] = v
 
-            scores_1 = torch.einsum('bshd,bthd->bsht', q_1, self.k_cache_1[:bsz, :end_pos]) * self.scale
-            scores_2 = torch.einsum('bshd,bthd->bsht', q_2, self.k_cache_2[:bsz, :end_pos]) * self.scale
+            scores_1 = torch.einsum('bshd,bthd->bsht', q_1.to(torch.float32), self.k_cache_1[:bsz, :end_pos].to(torch.float32)) * self.scale
+            scores_2 = torch.einsum('bshd,bthd->bsht', q_2.to(torch.float32), self.k_cache_2[:bsz, :end_pos].to(torch.float32)) * self.scale
         else:
             wkv_b = self.wkv_b.weight if self.wkv_b.scale is None else weight_dequant(self.wkv_b.weight, self.wkv_b.scale) 
             wkv_b = wkv_b.view(self.n_local_heads, -1, self.kv_lora_rank)
@@ -400,11 +400,11 @@ class DLA(nn.Module):
             k_nope_1, k_nope_2 = torch.chunk(self.kv_cache[:bsz, :end_pos], 2, dim = -1)
             k_pe_1, k_pe_2 = torch.chunk(self.pe_cache[:bsz, :end_pos], 2, dim = -1)
 
-            scores_1 = (torch.einsum('bshc,btc->bsht', q_nope_1.to(torch.bfloat16), k_nope_1.to(torch.bfloat16)) + \
-                    torch.einsum('bshr,btr->bsht', q_pe_1.to(torch.bfloat16), k_pe_1.to(torch.bfloat16))) * self.scale
+            scores_1 = (torch.einsum('bshc,btc->bsht', q_nope_1.to(torch.float32), k_nope_1.to(torch.float32)) + \
+                    torch.einsum('bshr,btr->bsht', q_pe_1.to(torch.float32), k_pe_1.to(torch.float32))) * self.scale
             
-            scores_2 = (torch.einsum('bshc,btc->bsht', q_nope_2.to(torch.bfloat16), k_nope_2.to(torch.bfloat16)) + \
-                    torch.einsum('bshr,btr->bsht', q_pe_2.to(torch.bfloat16), k_pe_2.to(torch.bfloat16))) * self.scale
+            scores_2 = (torch.einsum('bshc,btc->bsht', q_nope_2.to(torch.float32), k_nope_2.to(torch.float32)) + \
+                    torch.einsum('bshr,btr->bsht', q_pe_2.to(torch.float32), k_pe_2.to(torch.float32))) * self.scale
 
 		# QK-Clip. See Kimi-K2: Open Agentic Intelligence (arXiv:2507.20534)
         if self.training:
@@ -417,8 +417,8 @@ class DLA(nn.Module):
             eta_1 = torch.minimum(self.max_attn_score / (max_1 + 1e-6), torch.tensor(1.0, device=scores_1.device, dtype=scores_1.dtype))
             eta_2 = torch.minimum(self.max_attn_score / (max_2 + 1e-6), torch.tensor(1.0, device=scores_2.device, dtype=scores_2.dtype))
 
-            scores_1 = torch.einsum('bh,bsht->bsht', eta_1.to(torch.bfloat16), scores_1)
-            scores_2 = torch.einsum('bh,bsht->bsht', eta_2.to(torch.bfloat16), scores_2)
+            scores_1 = torch.einsum('bh,bsht->bsht', eta_1.to(scores_1.dtype), scores_1)
+            scores_2 = torch.einsum('bh,bsht->bsht', eta_2.to(scores_2.dtype), scores_2)
 
         if mask is not None:
             mask = mask.unsqueeze(1)
