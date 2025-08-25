@@ -552,7 +552,7 @@ class ParallelSeperableConv1d(nn.Module):
         assert out_channels % world_size == 0, f"Output channels must be divisible by world size (world_size={world_size})"
         self.part_out_channels = out_channels // world_size
         #self.cache = torch.zeros(max_batch_size, in_channels, kernel_size, dtype=torch.bfloat16)
-        self.register_buffer('cache', torch.zeros(max_batch_size, in_channels, kernel_size, dtype=torch.bfloat16))
+        self.register_buffer('cache', torch.zeros(max_batch_size, in_channels, kernel_size, dtype=torch.bfloat16), persistent=False)
         self.bsz = args.max_batch_size
 
         self.depthwise = nn.Conv1d(
