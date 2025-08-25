@@ -425,8 +425,8 @@ class DLA(nn.Module):
             scores_1 += mask
             scores_2 += mask
 
-        weights_1 = u.f_softmax(scores_1.to(torch.float32), dim=-1)
-        weights_2 = u.f_softmax(scores_2.to(torch.float32), dim=-1)
+        weights_1 = F.softmax(scores_1.to(torch.float32), dim=-1)
+        weights_2 = F.softmax(scores_2.to(torch.float32), dim=-1)
         weights = weights_1 - lambda_ * weights_2
 
         if attn_impl == 'naive':
@@ -501,10 +501,10 @@ class SSA(nn.Module):
         kv = kv.view(bsz, seqlen, self.n_local_heads, -1)
         k, v = torch.split(kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1)
 
-        q_nope = u.f_silu(q_nope)
-        q_pe = u.f_silu(q_pe)
-        k = u.f_silu(k)
-        k_pe = u.f_silu(k_pe)
+        q_nope = F.silu(q_nope)
+        q_pe = F.silu(q_pe)
+        k = F.silu(k)
+        k_pe = F.silu(k_pe)
 
         # Q-Clip and K-Clip inspired by Kimi-K2. For more information about the QK-Clip algorithm, see arXiv:2507.20534
         max_q_nope = q_nope.view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
@@ -624,8 +624,8 @@ class GHM(nn.Module):
     def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
         bsz, _, _ = x.size()
         
-        scores = self.gate_2(u.f_silu(self.gate_1(x)))
-        scores = u.f_sigmoid(scores)                 # (batch_size, seq_len, 2)
+        scores = self.gate_2(F.silu(self.gate_1(x)))
+        scores = F.sigmoid(scores)                 # (batch_size, seq_len, 2)
         scores = scores.sum(dim = 1, keepdim=False)  # (batch_size, 2)
 
         ssa_scores = scores[:, :1].squeeze(-1)
@@ -715,14 +715,14 @@ class GHM(nn.Module):
                 ssm_states = states[ssm_idx]
                 B = torch.cat((nope_B, pe_B), dim=-1)
                 C = torch.cat((nope_C, pe_C), dim=-1)
-                B, C = u.f_silu(B), u.f_silu(C)
+                B, C = F.silu(B), F.silu(C)
                 X, A, B, C = [xx.to(torch.float32) for xx in (X, A, B, C)]
                 ssm_outputs, ssm_new_states = u.ssd(X, A, B, C, block_len=self.attn.block_len, initial_states=ssm_states)
             else:
                 ssm_nope_states = nope_states[ssm_idx] if nope_states is not None else None
                 ssm_pe_states = pe_states[ssm_idx] if pe_states is not None else None
 
-                pe_B, pe_C, nope_B, nope_C = [u.f_silu(xx) for xx in (pe_B, pe_C, nope_B, nope_C)]
+                pe_B, pe_C, nope_B, nope_C = [F.silu(xx) for xx in (pe_B, pe_C, nope_B, nope_C)]
                 
                 X, A, nope_B, nope_C, pe_B, pe_C = [xx.to(torch.float32) for xx in (X, A, nope_B, nope_C, pe_B, pe_C)]
 
@@ -759,7 +759,7 @@ class MLP(nn.Module):
             self.conv = ParallelSeperableConv1d(dim, mlp_dim, kernel_size=conv_kernel_size, max_batch_size=max_batch_size)
     
     def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor] = None):
-        h = u.f_silu(self.w1(x)) * self.w3(x)
+        h = F.silu(self.w1(x)) * self.w3(x)
         if self.conv is not None:
             h += self.conv(x)
         return self.w2(h)
@@ -776,7 +776,7 @@ class Gate(nn.Module):
         self.bias = nn.Parameter(torch.empty(args.n_routed))
     def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
         scores = linear(x, self.weight)
-        scores = u.f_sigmoid(scores)
+        scores = F.sigmoid(scores)
         if padding_mask is not None:
             scores[padding_mask] = 0
         original_scores = scores
@@ -800,7 +800,7 @@ class Expert(nn.Module):
         self.w2 = Linear(moe_dim, dim)
         self.w3 = Linear(dim, moe_dim)
     def forward(self, x:torch.Tensor):
-        return self.w2(u.f_silu(self.w1(x)) * self.w3(x))
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
 class MoE(nn.Module):
     # Mixture of Experts (MoE)

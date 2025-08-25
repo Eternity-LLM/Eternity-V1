@@ -4,28 +4,6 @@ from typing import Optional
 from einops import rearrange, repeat
 from triton_kernels.functions import ActQuantFunction, WeightDequantFunction, FP8GEMMFunction
 
-def f(x:torch.Tensor):
-    idx_1 = x>=0.0
-    idx_2 = x<0.0
-    y = torch.zeros_like(x)
-    y[idx_1] = (x[idx_1] + 1.0) ** 2
-    y[idx_2] = 1.0 / ((x[idx_2] - 1.0) ** 2 )
-    return y
-
-def f_sigmoid(x, s:float = 3.0):
-    # "sigmoid" function with function f instead of exp
-    return 1./(1.+f(-x*s))
-
-def f_silu(x, s:float = 3.0):
-    # "silu" function with function f instead of exp
-    return x*f_sigmoid(x, s)
-
-def f_softmax(x, s:float = 3.0, dim:int = -1):
-    # "softmax" function with function f instead of exp
-    x = f(x*s)
-    s = torch.sum(x, dim = dim, keepdim = True)
-    return x / s
-
 def act_quant(x:torch.Tensor):
     # Arguments:
     #     x (torch.Tensor): input tensor to be quantized
