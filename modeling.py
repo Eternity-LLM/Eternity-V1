@@ -411,11 +411,11 @@ class DLA(nn.Module):
             max_1 = scores_1.transpose(-3, -2).view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
             max_2 = scores_2.transpose(-3, -2).view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
 
-            max_1[max_1==0] += 1e-5
-            max_2[max_2==0] += 1e-5
+            max_1[max_1==0] += 1e-6
+            max_2[max_2==0] += 1e-6
 
-            eta_1 = torch.minimum(self.max_attn_score / (max_1 + 1e-6), torch.tensor(1.0, device=scores_1.device, dtype=scores_1.dtype))
-            eta_2 = torch.minimum(self.max_attn_score / (max_2 + 1e-6), torch.tensor(1.0, device=scores_2.device, dtype=scores_2.dtype))
+            eta_1 = torch.minimum(self.max_attn_score / max_1, torch.tensor(1.0, device=scores_1.device, dtype=scores_1.dtype))
+            eta_2 = torch.minimum(self.max_attn_score / max_2, torch.tensor(1.0, device=scores_2.device, dtype=scores_2.dtype))
 
             scores_1 = torch.einsum('bh,bsht->bsht', eta_1.to(scores_1.dtype), scores_1)
             scores_2 = torch.einsum('bh,bsht->bsht', eta_2.to(scores_2.dtype), scores_2)
@@ -512,10 +512,15 @@ class SSA(nn.Module):
         max_q_pe = q_pe.view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
         max_k_pe = k_pe.view(bsz, self.n_local_heads, -1).max(dim=-1)[0]
 
-        eta_q_nope = torch.minimum(10.0 / (max_q_nope + 1e-6), torch.tensor(1.0, device=q_nope.device, dtype=q_nope.dtype))
-        eta_k_nope = torch.minimum(10.0 / (max_k_nope + 1e-6), torch.tensor(1.0, device=k.device, dtype=k.dtype))
-        eta_q_pe = torch.minimum(10.0 / (max_q_pe + 1e-6), torch.tensor(1.0, device=q_pe.device, dtype=q_pe.dtype))
-        eta_k_pe = torch.minimum(10.0 / (max_k_pe + 1e-6), torch.tensor(1.0, device=k_pe.device, dtype=k_pe.dtype))
+        max_q_nope[max_q_nope==0] += 1e-6
+        max_k_nope[max_k_nope==0] += 1e-6
+        max_q_pe[max_q_pe==0] += 1e-6
+        max_k_pe[max_k_pe==0] += 1e-6
+
+        eta_q_nope = torch.minimum(10.0 / max_q_nope, torch.tensor(1.0, device=q_nope.device, dtype=q_nope.dtype))
+        eta_k_nope = torch.minimum(10.0 / max_k_nope, torch.tensor(1.0, device=k.device, dtype=k.dtype))
+        eta_q_pe = torch.minimum(10.0 / max_q_pe, torch.tensor(1.0, device=q_pe.device, dtype=q_pe.dtype))
+        eta_k_pe = torch.minimum(10.0 / max_k_pe, torch.tensor(1.0, device=k_pe.device, dtype=k_pe.dtype))
 
         q_nope = torch.einsum('bh,bshd->bshd', eta_q_nope, q_nope)
         k = torch.einsum('bh,bthd->bthd', eta_k_nope, k)
@@ -691,10 +696,15 @@ class GHM(nn.Module):
             max_C_pe = pe_C.view(bsz, self.part_n_heads, -1).max(dim=-1)[0]
             max_B_pe = pe_B.view(bsz, self.part_n_heads, -1).max(dim=-1)[0]
 
-            eta_C_nope = torch.minimum(10.0 / (max_C_nope + 1e-6), torch.tensor(1.0, device=nope_C.device, dtype=nope_C.dtype))
-            eta_B_nope = torch.minimum(10.0 / (max_B_nope + 1e-6), torch.tensor(1.0, device=nope_B.device, dtype=nope_B.dtype))
-            eta_C_pe = torch.minimum(10.0 / (max_C_pe + 1e-6), torch.tensor(1.0, device=pe_C.device, dtype=pe_C.dtype))
-            eta_B_pe = torch.minimum(10.0 / (max_B_pe + 1e-6), torch.tensor(1.0, device=pe_B.device, dtype=pe_B.dtype))
+            max_C_nope[max_C_nope==0] += 1e-6
+            max_B_nope[max_B_nope==0] += 1e-6
+            max_C_pe[max_C_pe==0] += 1e-6
+            max_B_pe[max_B_pe==0] += 1e-6
+
+            eta_C_nope = torch.minimum(10.0 / max_C_nope, torch.tensor(1.0, device=nope_C.device, dtype=nope_C.dtype))
+            eta_B_nope = torch.minimum(10.0 / max_B_nope, torch.tensor(1.0, device=nope_B.device, dtype=nope_B.dtype))
+            eta_C_pe = torch.minimum(10.0 / max_C_pe, torch.tensor(1.0, device=pe_C.device, dtype=pe_C.dtype))
+            eta_B_pe = torch.minimum(10.0 / max_B_pe, torch.tensor(1.0, device=pe_B.device, dtype=pe_B.dtype))
 
             nope_C = torch.einsum('bh,bshd->bshd', eta_C_nope, nope_C)
             nope_B = torch.einsum('bh,bthd->bthd', eta_B_nope, nope_B)

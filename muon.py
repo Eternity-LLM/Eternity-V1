@@ -51,5 +51,6 @@ class Muon(torch.optim.Optimizer):
                 if M_t.ndim == 1:
                     M_t = M_t.unsqueeze(0)
                 O_t = newtonschulz5(M_t) * state['scale'] * 0.2
+                O_t = O_t.reshape(*p.data.shape)
                 p.data.sub_(lr*(O_t + weight_decay * p.data))
         return loss
