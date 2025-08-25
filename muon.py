@@ -48,8 +48,8 @@ class Muon(torch.optim.Optimizer):
                 state = self.state[p]
                 M_t = momentum * state['momentum_m_buffer'] + grad
                 state['momentum_m_buffer'] = M_t
-                if M_t.ndim == 1:
-                    M_t = M_t.unsqueeze(0)
+                if M_t.ndim != 2:
+                    M_t = M_t.reshape(M_t.size(0), -1)
                 O_t = newtonschulz5(M_t) * state['scale'] * 0.2
                 p.data.sub_(lr*(O_t.reshape(*p.size()) + weight_decay * p.data))
         return loss
