@@ -3,7 +3,7 @@ from torch import nn
 from torch.optim.optimizer import ParamsT
 
 def newtonschulz5(G, steps:int=5, eps:float=1e-7):
-    assert G.ndim == 2
+    assert G.ndim == 2, f'Number of dimensions ({G.ndim}) is not available.'
     a, b, c = (3.4445, -4.7750, 2.0315)
     X = G.bfloat16()
     X /= (X.norm() + eps)
@@ -51,6 +51,5 @@ class Muon(torch.optim.Optimizer):
                 if M_t.ndim == 1:
                     M_t = M_t.unsqueeze(0)
                 O_t = newtonschulz5(M_t) * state['scale'] * 0.2
-                O_t = O_t.reshape(*p.data.shape)
-                p.data.sub_(lr*(O_t + weight_decay * p.data))
+                p.data.sub_(lr*(O_t.reshape(*p.size()) + weight_decay * p.data))
         return loss
