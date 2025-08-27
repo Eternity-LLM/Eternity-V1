@@ -907,9 +907,9 @@ class StateFormer(nn.Module):
             attn_mask = torch.full((seqlen, seqlen), float('-inf'), device=tokens.device, requires_grad=False).triu_(1)
         for layer in self.layers:
             if n < self.n_diff_attn_layers:
-                h = layer(h, start_pos, freqs_cis, attn_mask)
+                h = layer(h, start_pos, freqs_cis, attn_mask, padding_mask=padding_mask)
             else:
-                h = layer(h, start_pos, freqs_cis)
+                h = layer(h, start_pos, freqs_cis, padding_mask=padding_mask)
             n += 1
             # print(n)
         h = self.norm(h)
