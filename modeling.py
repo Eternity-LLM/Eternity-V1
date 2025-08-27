@@ -759,9 +759,10 @@ class MLP(nn.Module):
             self.conv = ParallelSeperableConv1d(dim, mlp_dim, kernel_size=conv_kernel_size, max_batch_size=max_batch_size)
     
     def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor] = None):
-        h = F.silu(self.w1(x)) * self.w3(x)
+        h = self.w3(x)
         if self.conv is not None:
             h += self.conv(x)
+        h = F.silu(self.w1(x)) * h
         return self.w2(h)
 
 class Gate(nn.Module):
@@ -858,10 +859,10 @@ class Block(nn.Module):
         #     freqs_cis: precomputed freqs_cis of rotary position embedding (RoPE).
         #     mask: optional attention mask for differential attention layers (default: None).
         #     padding_mask: optional padding mask for the input tokens, with 1s for padding tokens and 0s for non-padding tokens (default: None).
-        x = self.dr(x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask) if mask is not None else  \
-            x + self.seq_transformation(self.norm1(x), start_pos, freqs_cis))
-        x = self.dr(x + self.ffn(self.norm2(x)) if padding_mask is not None else \
-            x + self.ffn(self.norm2(x), padding_mask))
+        h = self.dr(self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask) if mask is not None else  \
+                    self.seq_transformation(self.norm1(x), start_pos, freqs_cis))
+        x = h + self.dr(self.ffn(self.norm2(x)) if padding_mask is None else \
+                        self.ffn(self.norm2(x), padding_mask))
         return x
 
 class StateFormer(nn.Module):
