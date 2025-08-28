@@ -906,7 +906,7 @@ class StateFormer(nn.Module):
         n = 0
         if attn_mask is None and seqlen >1:
             attn_mask = torch.full((bsz, seqlen, seqlen), float('-inf'), device=tokens.device, requires_grad=False).tril_(1)
-        if padding is not None:
+        if padding_mask is not None:
             __p = padding_mask.expand(-1, -1, seqlen)
             attn_mask[__p] = float('-inf')
             attn_mask = attn_mask.transpose(-1, -2)
