@@ -778,8 +778,8 @@ class Gate(nn.Module):
     def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
         scores = linear(x, self.weight)
         scores = F.sigmoid(scores)
-        if padding_mask is not None:
-            scores[padding_mask] = 0
+        #if padding_mask is not None:
+        #    scores[padding_mask] = 0
         original_scores = scores
         scores += self.bias
         if self.n_groups > 1 :
@@ -861,8 +861,8 @@ class Block(nn.Module):
         #     padding_mask: optional padding mask for the input tokens, with 1s for padding tokens and 0s for non-padding tokens (default: None).
         h = self.dr(self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask) if mask is not None else  \
                     self.seq_transformation(self.norm1(x), start_pos, freqs_cis))
-        x = h + self.dr(self.ffn(self.norm2(x)) if padding_mask is None else \
-                        self.ffn(self.norm2(x), padding_mask))
+        x = x + self.dr(self.ffn(self.norm2(h)) if padding_mask is None else \
+                        self.ffn(self.norm2(h), padding_mask))
         return x
 
 class StateFormer(nn.Module):
@@ -899,12 +899,18 @@ class StateFormer(nn.Module):
         #   logits: (batch_size, seq_len, vocab_size) tensor of logits for each token in the sequence.
         
         seqlen = tokens.size(1)
+        bsz = tokens.size(0)
         h = self.emb(tokens, padding_mask)
         # print('emb')
         freqs_cis = self.freqs_cis[start_pos:(start_pos+seqlen)]
         n = 0
         if attn_mask is None and seqlen >1:
-            attn_mask = torch.full((seqlen, seqlen), float('-inf'), device=tokens.device, requires_grad=False).triu_(1)
+            attn_mask = torch.full((bsz, seqlen, seqlen), float('-inf'), device=tokens.device, requires_grad=False).tril_(1)
+        if padding is not None:
+            __p = padding_mask.expand(-1, -1, seqlen)
+            attn_mask[__p] = float('-inf')
+            attn_mask = attn_mask.transpose(-1, -2)
+            attn_mask[__p] = float('-inf')
         for layer in self.layers:
             if n < self.n_diff_attn_layers:
                 h = layer(h, start_pos, freqs_cis, attn_mask, padding_mask=padding_mask)
@@ -1016,13 +1022,13 @@ if '--test' in sys.argv or '-t' in sys.argv or '/t' in sys.argv:
 
     tokens = torch.randint(0, args.vocab_size, (args.max_batch_size, 129), device=device)
     xtrain, ytrain = tokens[:, :-1], tokens[:, 1:]
-    padding_mask = torch.zeros_like(xtrain, device=device)
+    padding_mask = torch.zeros_like(xtrain, device=device, dtype=bool)
     
     print('Start training...')
     for i in range(20):
         optimizer.zero_grad()
         # print(f'Epoch {i+1} started.')
-        logits = model(xtrain,padding_mask = padding_mask, start_pos=0)
+        logits = model(xtrain, padding_mask = padding_mask, start_pos=0)
         # print(f'Epoch {i+1} forward pass completed.')
         loss = criterion(
             logits.reshape(-1, logits.shape[-1]),
