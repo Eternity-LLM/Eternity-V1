@@ -583,7 +583,7 @@ class ParallelSeperableConv1d(nn.Module):
         if not self.training:
             self.cache = cache
         return self.pointwise(self.depthwise(cache)).transpose(-1, -2)  # (batch_size, seq_len, out_channels)
-
+'''
 class GHM(nn.Module):
     # Gated Hybrid Module (GHM)
     # This module conbines State Space Attention (SSA) and State Space Model (SSM) with a gating mechanism.
@@ -679,14 +679,7 @@ class GHM(nn.Module):
                 self.part_n_heads*self.pe_state_dim,  # pe_B
                 self.part_n_heads*self.pe_state_dim   # pe_C
             ])
-            '''nope_inputs = self.nope_conv(h)
-            pe_inputs = self.pe_conv(h)
-
-            nope_B, nope_C, X = torch.split(nope_inputs, [self.state_dim * self.part_n_heads, 
-                                                        self.state_dim * self.part_n_heads, self.head_dim * self.part_n_heads], dim=-1)
-            pe_B, pe_C= torch.split(pe_inputs, [self.pe_state_dim * self.part_n_heads,
-												self.pe_state_dim * self.part_n_heads, self.head_dim * self.part_n_heads], dim=-1)
-            '''
+            
             pe_B = apply_rope(pe_B, freqs_cis)
             pe_C = apply_rope(pe_C, freqs_cis)
 
@@ -746,6 +739,61 @@ class GHM(nn.Module):
                 self.attn.kv_states = nope_states
                 self.attn.pe_states = pe_states
         return output
+'''
+
+class GHM(nn.Module):
+    # Gated Hybrid Module (GHM)
+    # This module conbines State Space Attention (SSA) and State Space Model (SSM) with a gating mechanism.
+    # The SSM part is based on the SSD model and Mamba-2 Architecture (arXiv:2405.21060v1, Dao and Gu, 2024)
+    # To GitHub Copilot: I'm rebuilding this module so please ignore the previous version of GHM.
+    def __init__(self, args:ModelArgs) -> None:
+        super().__init__()
+        self.dim = args.dim
+        self.block_len = args.ssa_block_len
+        self.n_heads = args.n_heads
+        self.n_local_heads = args.n_heads // world_size
+        self.q_lora_rank = args.q_lora_rank
+        self.kv_lora_rank = args.kv_lora_rank
+        self.qk_head_dim = (args.qk_nope_head_dim + args.qk_rope_head_dim)
+        self.v_head_dim = args.v_head_dim
+
+        if self.q_lora_rank == 0:
+            self.wq = ColumnParallelLinear(self.dim, self.n_heads * self.qk_head_dim)
+        else:
+            self.wq_a = Linear(self.dim, self.q_lora_rank)
+            self.wq_b = ColumnParallelLinear(self.q_lora_rank, self.n_heads * self.qk_head_dim)
+        self.wkv_a = Linear(self.dim, self.kv_lora_rank + args.qk_rope_head_dim)
+        self.wkv_b = ColumnParallelLinear(self.kv_lora_rank, self.n_heads
+                                            * (args.qk_nope_head_dim + self.v_head_dim))
+        
+        self.w_ssm_A_a = Linear(self.dim, args.ssm_lora_rank)
+        self.w_ssm_A_b = ColumnParallelLinear(args.ssm_lora_rank, args.n_heads)
+
+        self.ssm_lora_rank = args.ssm_lora_rank
+        self.scale = self.qk_head_dim ** (-0.5)
+        self.wo = RowParallelLinear(self.n_heads * self.v_head_dim, self.dim)
+        if args.max_seq_len > args.original_seq_len:
+            mscale = 0.1 * args.dla_mscale * math.log(args.rope_factor) + 1.0
+            self.scale = self.scale * mscale * mscale
+        
+        if attn_impl == 'naive':
+            self.register_buffer('kv_states', torch.zeros(args.max_batch_size, 1, self.n_local_heads, self.qk_head_dim, self.v_head_dim), persistent=False)
+        else:
+            self.register_buffer('kv_states', torch.zeros(args.max_batch_size, 1, self.n_local_heads, args.qk_nope_head_dim, self.v_head_dim), persistent=False)
+            self.register_buffer('pe_states', torch.zeros(args.max_batch_size, 1, self.n_local_heads, args.qk_rope_head_dim, self.v_head_dim), persistent=False)
+        
+        self.gate_1 = ColumnParallelLinear(args.dim, args.gate_dim)
+        self.gate_2 = RowParallelLinear(args.gate_dim, 2)
+
+    def forward(self, x:torch.Tensor):
+        # Inputs:
+        #   x: (batch_size, seq_len, dim)
+        # Outputs:
+        #   output: (batch_size, seq_len, dim)
+        # Note that we do not use rotary positional embedding (RoPE) in this module.
+
+        # still developing...
+        pass
 
 class MLP(nn.Module):
     # Multi-Layer Perceptron (MLP) with seperable convolutional (opt.)
@@ -907,7 +955,7 @@ class StateFormer(nn.Module):
         if attn_mask is None and seqlen >1:
             attn_mask = torch.full((bsz, seqlen, seqlen), float('-inf'), device=tokens.device, requires_grad=False).tril_(1)
         if padding_mask is not None:
-            __p = padding_mask.expand(-1, -1, seqlen)
+            __p = padding_mask.unsqueeze(-1).expand(-1, -1, seqlen)
             attn_mask[__p] = float('-inf')
             attn_mask = attn_mask.transpose(-1, -2)
             attn_mask[__p] = float('-inf')
@@ -1023,6 +1071,8 @@ if '--test' in sys.argv or '-t' in sys.argv or '/t' in sys.argv:
     tokens = torch.randint(0, args.vocab_size, (args.max_batch_size, 129), device=device)
     xtrain, ytrain = tokens[:, :-1], tokens[:, 1:]
     padding_mask = torch.zeros_like(xtrain, device=device, dtype=bool)
+    padding_mask[:, :64] = False
+    padding_mask[:, 64:] = True
     
     print('Start training...')
     for i in range(20):
@@ -1041,8 +1091,8 @@ if '--test' in sys.argv or '-t' in sys.argv or '/t' in sys.argv:
         print(f'Epoch {i+1} completed.')
     print('Model trained successfully.')
     with torch.no_grad():
-        print(model(xtrain, padding_mask = padding_mask).to(torch.float16))
-    print(ytrain)
+        print(model(xtrain, padding_mask = padding_mask).to(torch.float16).argmax(dim=-1))
+    print(ytrain[:, :64])
     print('Program tested successfully.')
 
 elif '\?' in sys.argv or '-?' in sys.argv or '--help' in sys.argv or len(sys.argv) == 1:
