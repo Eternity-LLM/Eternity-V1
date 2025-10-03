@@ -1,6 +1,6 @@
 # fwd kernels
 # The following code is produced by DeepSeek-AI (https://github.com/deepseek-ai/DeepSeek-V3.2-Exp/)
-# We (Eternity-LLM Organization) is grateful to DeepSeek-AI for their open source contributions.
+# We (Eternity-LLM Organization) are grateful to DeepSeek-AI for their open source contributions.
 
 import torch
 import tilelang
