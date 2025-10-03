@@ -11,13 +11,13 @@ def act_quant(x:torch.Tensor):
     #     torch.Tensor: Output tensor after quantization
     return ActQuantFunction.apply(x)
 
-def weight_dequant(x:torch.Tensor, s:torch.Tensor):
-    # Arguments:
-    #     x (torch.Tensor): input tensor to be dequantized
-    #     s (torch.Tensor): scale tensor
-    # Returns:
-    #     torch.Tensor: Output tensor after dequantization
-    return WeightDequantFunction.apply(x, s)
+def weight_dequant(weight:torch.Tensor, scale:torch.Tensor):
+    shape = weight.shape
+    assert weight.dim() == 2
+    weight = weight.view(shape[0] // block_size, block_size, shape[1] // block_size, block_size).transpose(1, 2).contiguous().view(-1, block_size * block_size)
+    weight = (weight.float() * scale.view(-1, 1).float()).to(torch.get_default_dtype()).view(shape[0] // block_size, shape[1] // block_size, block_size, block_size).transpose(1, 2).contiguous().view(shape)
+    return weight
+
 
 def fp8_gemm(a:torch.Tensor, a_s:torch.Tensor, b:torch.Tensor, b_s:torch.Tensor):
     # Arguments:
