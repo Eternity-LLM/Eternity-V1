@@ -2,14 +2,15 @@ import torch
 import torch.nn.functional as F
 from typing import Optional
 from einops import rearrange, repeat
-from triton_kernels.functions import ActQuantFunction, WeightDequantFunction, FP8GEMMFunction
+# from triton_kernels.functions import ActQuantFunction, WeightDequantFunction, FP8GEMMFunction
+from kernels.quant import ActQuantFn, Fp8GemmFn, Fp8IndexFn
 
 def act_quant(x:torch.Tensor):
     # Arguments:
     #     x (torch.Tensor): input tensor to be quantized
     # Returns:
     #     torch.Tensor: Output tensor after quantization
-    return ActQuantFunction.apply(x)
+    return ActQuantFn.apply(x)
 
 def weight_dequant(weight:torch.Tensor, scale:torch.Tensor):
     shape = weight.shape
@@ -27,7 +28,11 @@ def fp8_gemm(a:torch.Tensor, a_s:torch.Tensor, b:torch.Tensor, b_s:torch.Tensor)
     #     b_s (torch.Tensor): the scaling factor of the second input matrix, must be contiguous
     # Returns:
     #     torch.Tensor: the result of the matrix multiplication
-    return FP8GEMMFunction.apply(a, a_s, b, b_s)
+    return Fp8GemmFn.apply(a, a_s, b, b_s)
+
+def fp8_index(q:torch.Tensor, q_s:torch.Tensor, k:torch.Tensor, k_s:torch.Tensor):
+    # FP8 index function for DeepSeek Sparse Attention (DSA)
+    return Fp8IndexFn.apply(q, q_s, k, k_s)
 
 # State Space Attention (SSA)
 # This algorithm is based on SSD algorithm, however, I made a few changes.
@@ -86,6 +91,10 @@ def ssa(Q:torch.Tensor, K:torch.Tensor, V:torch.Tensor, block_len:int = 64, init
     Y = rearrange(Y_diag + Y_off, "b c s h n -> b (c s) h n")
     return Y, new_states
 
+def ssd(X:torch.Tensor, A:torch.Tensor, B:torch.Tensor, C:torch.Tensor, block_len:int = 64, initial_states:Optional[torch.Tensor] = None):
+    pass
+
+'''
 # State Space Dual (SSD) algorithm    
 # The following code is mainly copied from https://github.com/state-spaces/mamba/
 # However, I (Haozhe Xu) improved this code so that it supports sequence length that is not divisible by block length.
@@ -156,3 +165,4 @@ def ssd(X, A, B, C, block_len:int = 64, initial_states=None):
     # Add output of intra-chunk and inter-chunk terms (diagonal and off-diagonal blocks)
     Y = rearrange(Y_diag+Y_off, "b c l h p -> b (c l) h p")
     return Y, final_state
+'''
