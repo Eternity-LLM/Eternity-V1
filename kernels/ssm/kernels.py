@@ -1,11 +1,8 @@
 # ssm kernels
-
 # The following code is copied from https://github.com/state-spaces/mamba/
 # We (Eternity-LLM Organization) are grateful to the original authors (Albert Gu & Tri Dao) for their open-source contributions.
 
 # Copyright (c) 2024, Tri Dao, Albert Gu.
-
-
 
 import math
 import torch
@@ -16,21 +13,7 @@ import triton.language as tl
 
 from einops import rearrange, repeat
 
-from packaging import version
-
-TRITON3 = version.parse(triton.__version__) >= version.parse("3.0.0")
-
-
-if TRITON3:
-    @triton.jit
-    def softplus(dt):
-        return tl.math.log(tl.math.exp(dt) + 1)
-else:
-    @triton.jit
-    def softplus(dt):
-        return tl.math.log1p(tl.exp(dt))
-
-# from mamba_ssm.ops.triton.softplus import softplus
+from mamba_ssm.ops.triton.softplus import softplus
 
 
 def init_to_zero(names):
