@@ -1,13 +1,14 @@
+# ssm kernels
+
 import torch
 from einops import rearrange
 import math
 
-from .chunk_state import *
-from .ssd_state_passing import *
+from .chunk_state import *         # _chunk_cumsum_fwd, _chunk_cumsum_bwd, _chunk_state_fwd, ...
+from .ssd_state_passing import *   # _state_passing_fwd, _state_passing_bwd
+from .bmm import _bmm_chunk_fwd, _bmm_chunk_bwd
+from .chunk_scan import *
 
-# still developing
-
-# ssm kernels
 # The following code is copied from https://github.com/state-spaces/mamba/
 # We (Eternity-LLM Organization) are grateful to the original authors (Albert Gu & Tri Dao) for their open-source contributions.
 
