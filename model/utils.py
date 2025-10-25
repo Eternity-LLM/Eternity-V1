@@ -1,4 +1,3 @@
-from hmac import new
 import torch
 import torch.nn.functional as F
 from typing import Optional, Tuple, Union
@@ -120,5 +119,14 @@ def rotate_activation(x:torch.Tensor) -> torch.Tensor:
     hid_sz = x.shape[-1]
     return x * (hid_sz ** -0.5)
 
-def qk_clip(attn_scores:torch.Tensor, max_val:int)->torch.Tensor:
-    pass
+def qk_clip(attn_scores:torch.Tensor, max_val:float)->torch.Tensor:
+    # Arguments:
+    #     attn_scores (torch.Tensor): attention scores tensor of shape (batch, seq_len, n_heads, seq_len)
+    #     max_val (float): maximum value to clip the attention scores
+    # Returns:
+    #     torch.Tensor: clipped attention scores tensor of the same shape as input
+    with torch.no_grad():
+        MAX = rearrange(attn_scores, 'b s h t -> b h (s t)').max(dim = -1)[0]
+        MAX[MAX == 0] = 1e-6
+        scale = max_val / MAX
+    return attn_scores * scale[:, None, :, None]

@@ -3,7 +3,9 @@
 # Based on DeepSeek-V3 (url https://github.com/deepseek-ai/deepseek-v3/)
 # Note that we use hybrid model (Attention, MLP, MoE, SSM)
 
+from ast import Tuple
 from einops import rearrange
+from sympy import Union
 from torch import nn
 from torch.nn import functional as F
 from torch import distributed as dist
@@ -53,6 +55,7 @@ class ModelArgs:
         n_heads: int = 128,
         mscale: float = 1.0,
         block_len: int = 64,
+        A_init_range: Tuple[float, float] = (1.0, 16.0),
         
 
         # feed-forward networks
@@ -88,7 +91,8 @@ class ModelArgs:
         # block
         n_csa_layers: int = 5,
         pure_attn_ratio: float = 0.08,
-        n_blocks: int = 61
+        n_blocks: int = 61,
+        dropout_rate: float = 0.2
     ) -> None:
         
         self.max_batch_size = max_batch_size
@@ -115,6 +119,7 @@ class ModelArgs:
         self.n_heads = n_heads
         self.mscale = mscale
         self.block_len = block_len
+        self.A_init_range = A_init_range
         
 
         # feed-forward networks
@@ -151,6 +156,7 @@ class ModelArgs:
         self.n_csa_layers = n_csa_layers
         self.pure_attn_ratio = pure_attn_ratio
         self.n_blocks = n_blocks
+        self.dropout_rate = dropout_rate
 
 class ParallelEmbedding(nn.Module):
     # Embedding layer with parallelism support across distributed processes and low-rank adaptation.
@@ -511,7 +517,7 @@ class SSA(nn.Module):
         self.q_norm = RMSNorm(self.q_lora_rank if self.q_lora_rank > 0 else self.dim)
         self.kv_norm = RMSNorm(self.kv_lora_rank)
 
-    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor):
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]=None):
         bsz, seqlen, _ = x.size()
         
         if self.q_lora_rank == 0:
@@ -543,7 +549,69 @@ class SSA(nn.Module):
     
 class LSM(nn.Module):
     # Lightning State Space Model (LSM)
-    # still developing...
+    # Based on state space duality.
+    # For more information, see the paper arXiv:2405.21060v1 (Dao and Gu, 2024).
+
+    def __init__(self, args:ModelArgs) -> None:
+        super().__init__()
+
+        self.dim = args.dim
+        self.block_len = args.block_len
+        self.n_heads = args.n_heads
+        self.n_local_heads = args.n_heads // world_size
+        self.c_lora_rank = args.q_lora_rank
+        self.bx_lora_rank = args.kv_lora_rank
+        self.cb_head_dim = args.qk_nope_head_dim
+        self.cb_discretization_head_dim = args.qk_rope_head_dim
+        self.x_head_dim = args.v_head_dim
+        self.cb_proj_head_dim = self.cb_head_dim + self.cb_discretization_head_dim
+
+        if self.c_lora_rank == 0:
+            self.wc = ColumnParallelLinear(self.dim, self.n_heads * self.cb_head_dim)
+        else:
+            self.wc_a = Linear(self.dim, self.c_lora_rank)
+            self.wc_b = ColumnParallelLinear(self.c_lora_rank, self.n_heads * self.cb_head_dim)
+        self.wbx_a = Linear(self.dim, self.bx_lora_rank + self.cb_discretization_head_dim)
+        self.wbx_b = ColumnParallelLinear(self.bx_lora_rank, self.n_heads * (self.cb_head_dim + self.x_head_dim))
+
+        self.register_buffer('ssm_states', torch.zeros(args.max_batch_size, 1, self.n_local_heads, self.cb_head_dim, self.x_head_dim), persistent=False)
+
+        # A parameter
+        A_init_range = args.A_init_range
+        assert A_init_range[0] > 0 and A_init_range[1] >= A_init_range[0]
+        A = torch.empty(self.nheads, dtype=torch.float32).uniform_(*A_init_range)
+        A_log = torch.log(A).to(dtype=Linear.dtype)
+        self.A_log = nn.Parameter(A_log)
+        self.A_log._no_weight_decay = True
+    
+    def forward(self, x:torch.Tensor):
+        bsz, seqlen, _ = x.size()
+
+        A = - torch.exp(self.A_log)
+
+        if self.c_lora_rank == 0:
+            c = self.wc(x)
+        else:
+            c = self.wc_b(self.wc_a(x))
+        c = c.view(bsz, seqlen, self.n_local_heads, self.cb_proj_head_dim)
+        c, dt_c = torch.split(c, [self.cb_head_dim, self.cb_discretization_head_dim], dim=-1)
+
+        bx = self.wbx_a(x)
+        bx, dt_b = torch.split(bx, [self.bx_lora_rank, self.cb_discretization_head_dim], dim=-1)
+        bx = self.wbx_b(bx)
+
+        bx = bx.view(bsz, seqlen, self.n_local_heads, self.cb_head_dim + self.x_head_dim)
+        b, x = torch.split(bx, [self.cb_head_dim, self.x_head_dim], dim=-1)
+
+        dt = dt_c @ dt_b
+
+        outputs, states = u.ssd(dt, x, A, b, c, block_len=self.block_len, initial_states=self.ssm_states, return_final_states=not self.training)
+        if not self.training:
+            self.ssm_states[:bsz] = states
+        return outputs
+
+class ParallelSeperableConv1d(nn.Module):
+    # still developing ...
     pass
 
 class MLP(nn.Module):
@@ -557,7 +625,7 @@ class MLP(nn.Module):
         if use_conv:
             self.conv = ParallelSeperableConv1d(dim, mlp_dim, kernel_size=conv_kernel_size, max_batch_size=max_batch_size)
     
-    def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor] = None):
+    def forward(self, x:torch.Tensor):
         h = self.w3(x)
         if self.conv is not None:
             h += self.conv(x)
@@ -574,11 +642,10 @@ class Gate(nn.Module):
         self.routed_scale = args.routed_scale
         self.weight = nn.Parameter(torch.empty(args.n_routed, args.dim))
         self.bias = nn.Parameter(torch.empty(args.n_routed))
-    def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
+    def forward(self, x:torch.Tensor):
         scores = linear(x, self.weight)
         scores = F.sigmoid(scores)
-        #if padding_mask is not None:
-        #    scores[padding_mask] = 0
+        
         original_scores = scores
         scores += self.bias
         if self.n_groups > 1 :
@@ -618,10 +685,10 @@ class MoE(nn.Module):
                                         for i in range(self.n_routed)])
         self.shared = MLP(args.dim, args.n_shared * args.moe_dim, use_conv=True, conv_kernel_size = args.shared_conv_kernel_size, max_batch_size=args.max_batch_size) if args.n_shared > 0 else None
     
-    def forward(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]=None):
+    def forward(self, x:torch.Tensor):
         shape = x.size()
         x = x.view(-1, self.dim)
-        weights, indices = self.gate(x, padding_mask)
+        weights, indices = self.gate(x)
         y = torch.zeros_like(x)
         counts = torch.bincount(indices.flatten(), minlength=self.n_routed).tolist()
         for i in range(self.start_idx, self.end_idx):
@@ -635,33 +702,32 @@ class MoE(nn.Module):
         if self.shared is not None:
             y = y + self.shared(x.view(shape)).view(y.shape)
         return y.view(shape)
-'''
+
 class Block(nn.Module):
     # Eternity-V1 StateFormer Block
     def __init__(self, args:ModelArgs, layer_idx:int) -> None:
         super().__init__()
-        if layer_idx < args.n_diff_attn_layers:
-            self.seq_transformation = csa(args, layer_idx)
+        if layer_idx < args.n_csa_layers:
+            self.seq_transformation = CSA(args)
         else:
-            if (layer_idx - args.n_diff_attn_layers + 1) % (1 // args.pure_attn_ratio) == 0:
+            if (layer_idx - args.n_csa_layers + 1) % (1 // args.pure_attn_ratio) == 0:
                 self.seq_transformation = SSA(args)
             else:
-                self.seq_transformation = GHM(args)
-        self.ffn = MLP(args.dim, args.mlp_dim, max_batch_size=args.max_batch_size, use_conv=True, conv_kernel_size=args.mlp_conv_kernel_size) if layer_idx < args.n_dense_layers else MoE(args)
+                self.seq_transformation = LSM(args)
+        self.ffn = MLP(
+        	args.dim, args.mlp_dim, max_batch_size=args.max_batch_size, use_conv=True, conv_kernel_size=args.mlp_conv_kernel_size
+        ) if layer_idx < args.n_dense_layers else MoE(args)
         self.norm1 = RMSNorm(args.dim)
         self.norm2 = RMSNorm(args.dim)
-        self.dr = nn.Dropout(p=0.2)
-    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]=None, padding_mask:Optional[torch.Tensor]=None):
+        self.dr = nn.Dropout(p=args.dropout_rate)
+    def forward(self, x:torch.Tensor, start_pos:int, freqs_cis:torch.Tensor, mask:Optional[torch.Tensor]=None):
         # Arguments:
         #     x: (batch_size, seq_len, dim) tensor of embedded tokens.
         #     start_pos: starting position for the sequence (default: 0).
         #     freqs_cis: precomputed freqs_cis of rotary position embedding (RoPE).
-        #     mask: optional attention mask for differential attention layers (default: None).
-        #     padding_mask: optional padding mask for the input tokens, with 1s for padding tokens and 0s for non-padding tokens (default: None).
-        h = self.dr(self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask) if mask is not None else  \
-                    self.seq_transformation(self.norm1(x), start_pos, freqs_cis))
-        x = x + self.dr(self.ffn(self.norm2(h)) if padding_mask is None else \
-                        self.ffn(self.norm2(h), padding_mask))
+        #     mask: optional attention mask for sparse attention layers (default: None).
+        h = self.dr(self.seq_transformation(self.norm1(x), start_pos, freqs_cis, mask))
+        x = x + self.dr(self.ffn(self.norm2(h)))
         return x
 
 class StateFormer(nn.Module):
@@ -676,14 +742,14 @@ class StateFormer(nn.Module):
         self.emb = ParallelEmbedding(args.vocab_size, args.dim, init_weight=None, lora_rank=args.emb_lora_rank)
         self.layers = torch.nn.ModuleList()
         self.n_blocks = args.n_blocks
-        self.n_diff_attn_layers = args.n_diff_attn_layers
+        self.n_csa_layers = args.n_csa_layers
         self.ratio = args.pure_attn_ratio
         for idx in range(args.n_blocks):
             self.layers.append(Block(args, idx))
         self.norm = RMSNorm(args.dim)
         self.final = ColumnParallelLinear(args.dim, args.vocab_size, dtype = torch.get_default_dtype())
         self.register_buffer("freqs_cis", precompute_freqs_cis(args), persistent=False)
-        # print(self.freqs_cis.size())
+
     
     # If you are using this model for inference, then add this line of code:
     # @torch.inference_mode()
@@ -692,7 +758,7 @@ class StateFormer(nn.Module):
         # Arguments:
         #   tokens: (batch_size, seq_len) tensor of tokens.
         #   start_pos: starting position for the sequence (default: 0).
-        #   attn_mask: optional attention mask for differential attention layers (default: None).
+        #   attn_mask: optional attention mask for sparse attention layers (default: None).
         #   padding_mask: optional padding mask for the input tokens, with 1s for padding tokens and 0s for non-padding tokens (default: None).
         # Outputs:
         #   logits: (batch_size, seq_len, vocab_size) tensor of logits for each token in the sequence.
@@ -700,23 +766,27 @@ class StateFormer(nn.Module):
         seqlen = tokens.size(1)
         bsz = tokens.size(0)
         h = self.emb(tokens, padding_mask)
-        # print('emb')
+        
         freqs_cis = self.freqs_cis[start_pos:(start_pos+seqlen)]
         n = 0
-        if attn_mask is None and seqlen >1:
-            attn_mask = torch.full((bsz, seqlen, seqlen), float('-inf'), device=tokens.device, requires_grad=False).tril_(1)
-        if padding_mask is not None:
-            __p = padding_mask.unsqueeze(-1).expand(-1, -1, seqlen)
-            attn_mask[__p] = float('-inf')
-            attn_mask = attn_mask.transpose(-1, -2)
-            attn_mask[__p] = float('-inf')
+
+        with torch.no_grad:
+            if attn_mask is None and seqlen >1:
+                attn_mask = torch.full((bsz, seqlen, seqlen), float('-inf'), device=tokens.device, requires_grad=False).tril_(1)
+            if padding_mask is not None:
+                __p = padding_mask.unsqueeze(-1).expand(-1, -1, seqlen)
+                attn_mask[__p] = float('-inf')
+                attn_mask = attn_mask.transpose(-1, -2)
+                attn_mask[__p] = float('-inf')
+                attn_mask = attn_mask.transpose(-1, -2)
+        
         for layer in self.layers:
-            if n < self.n_diff_attn_layers:
-                h = layer(h, start_pos, freqs_cis, attn_mask, padding_mask=padding_mask)
+            if n < self.n_csa_layers:
+                h = layer(h, start_pos, freqs_cis, attn_mask)
             else:
-                h = layer(h, start_pos, freqs_cis, padding_mask=padding_mask)
+                h = layer(h, start_pos, freqs_cis)
             n += 1
-            # print(n)
+            
         h = self.norm(h)
         logits = self.final(h)
         if world_size > 1:
@@ -725,52 +795,70 @@ class StateFormer(nn.Module):
             logits = torch.cat(all_logits, dim = -1)
         return logits
 
-'''
 
-'''
+
 # Model cold start decorator
 # Usage:
 # @cold_start(model)
 # def your_function(...):
 #     ...
+# or, you can use it as a context manager:
+# with cold_start(model):
+#     ...
+
+class __EternityV1ColdStartDecorator:
+    model = None
+
+    def __init__(self, func):
+        self.func = func
+    
+    def set_model(self, model:StateFormer):
+        self.model = model
+
+    def __set_requires_grad(self, r:bool):
+        try:
+            model = self.model
+            assert model is not None
+        except:
+            raise RuntimeError('Model not found.')
+        # Set embedding layer
+        model.emb.weights.requires_grad = False
+        for layer in model.layers:
+            seqt = layer.seq_transformation
+            ffn = layer.ffn
+            # Set attn layers
+            if type(seqt).__name__ != 'LSM':
+                for p in seqt.parameters():
+                    p.requires_grad = r
+            # Set ffn layers
+            if type(ffn).__name__ == 'MLP':
+                ffn.w1.weight.requires_grad = r
+                ffn.w3.weight.requires_grad = r
+            else:
+                ffn.shared.w1.weight.requires_grad = r
+                ffn.shared.w3.weight.requires_grad = r
+                for expert in ffn.experts:
+                    expert.w1.weight.requires_grad = r
+                    expert.w2.weight.requires_grad = r
+                    expert.w3.weight.requires_grad = r
+
+    def __call__(self, *args, **kwargs):
+        self.__set_requires_grad(False)
+        return_val = self.func(*args, **kwargs)
+        self.__set_requires_grad(True)
+        return return_val
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
 def cold_start(model:StateFormer):
-    def run_cold_start(func):
-        def set_requires_grad(r:bool):
-            # Set embedding layer
-            model.emb.weight.requires_grad = False
-            for layer in model.layers:
-                seqt = layer.seq_transformation
-                ffn = layer.ffn
-                # Set attn layers
-                attn = seqt if type(seqt).__name__ != 'GHM' else seqt.attn
-                if attn.q_lora_rank == 0:
-                    attn.wq.weight.requires_grad = r
-                else:
-                    attn.wq_a.weight.requires_grad = r
-                    attn.wq_b.weight.requires_grad = r
-                attn.wkv_a.weight.requires_grad = r
-                # Set ffn layers
-                if type(ffn).__name__ == 'MLP':
-                    ffn.w1.weight.requires_grad = r
-                    ffn.w3.weight.requires_grad = r
-                else:
-                    ffn.shared.w1.weight.requires_grad = r
-                    ffn.shared.w3.weight.requires_grad = r
-                    for expert in ffn.experts:
-                        expert.w1.weight.requires_grad = r
-                        expert.w2.weight.requires_grad = r
-                        expert.w3.weight.requires_grad = r
+    decorator = __EternityV1ColdStartDecorator
+    decorator.model = model
+    return decorator
 
-        def run_func(*args, **kwargs):
-            set_requires_grad(False)
-            return_val = func(*args, **kwargs)
-            set_requires_grad(True)
-            return return_val
-        return run_func
-    return run_cold_start
-'''
-
-"""
 if '--test' in sys.argv or '-t' in sys.argv or '/t' in sys.argv:
     # Train the model in a small scale with random tokens
     # in order to find out the bugs in the program
@@ -860,4 +948,3 @@ elif '\?' in sys.argv or '-?' in sys.argv or '--help' in sys.argv or len(sys.arg
 else:
     print('Invalid command.')
     print('Use -? command for help.')
-"""
